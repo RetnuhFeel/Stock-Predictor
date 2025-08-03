@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct StockAnalyzerAppApp: App {
+struct StockAnalyzerApp: App {
     var body: some Scene {
         WindowGroup {
             TabView {
