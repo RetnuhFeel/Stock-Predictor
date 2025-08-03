@@ -2,7 +2,7 @@ import Foundation
 
 class NetworkManager {
     static let shared = NetworkManager()
-    private let apiKey = "d27r899r01qr2iat5tm0d27r899r01qr2iat5tmg" // finnhub.io API Key
+    private let apiKey = "YOUR_KEY_HERE" // Your finnhub.io API Key goes here
 
     func fetchStockQuote(symbol: String, completion: @escaping (Stock?) -> Void) {
         let urlString = "https://finnhub.io/api/v1/quote?symbol=\(symbol)&token=\(apiKey)"
