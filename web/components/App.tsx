@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { DisclaimerGate } from "./DisclaimerGate";
+import { WakingBanner } from "./Notices";
 import { SearchBox } from "./SearchBox";
 import { StockPanel } from "./StockPanel";
 import { ThemeToggle } from "./ThemeToggle";
@@ -20,7 +21,8 @@ export function App() {
           <h1 className="text-2xl font-bold">📈 Stock Predictor <span className="text-xs font-normal text-slate-500">experimental</span></h1>
           <ThemeToggle />
         </header>
-        <div className="grid gap-6 md:grid-cols-[280px_1fr]">
+        <div className="mb-4"><WakingBanner /></div>
+      <div className="grid gap-6 md:grid-cols-[280px_1fr]">
           <aside className="space-y-4">
             <SearchBox onPick={(s) => { add(s); setPicked(s); }} />
             <Watchlist symbols={list} selected={selected} onSelect={setPicked} onRemove={(s) => { remove(s); if (picked === s) setPicked(null); }} />

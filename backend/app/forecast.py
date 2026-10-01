@@ -18,13 +18,15 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingRegressor
 
+from .errors import InsufficientData
+
 SEED = 42
 FEATURES = ["ret_1", "ret_5", "ret_10", "ret_21", "vol_10", "vol_21", "rsi_14", "macd_hist", "dist_sma50"]
 MIN_ROWS = 250  # ~1 year of daily bars needed for a meaningful backtest
 
 
-class InsufficientData(ValueError):
-    pass
+MIN_INDEPENDENT_TESTS = 30  # below this many non-overlapping test windows, the backtest is labelled "small sample"
+N_BOOT = 300
 
 
 def rsi(close: pd.Series, n: int = 14) -> pd.Series:
@@ -96,6 +98,26 @@ def _metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     }
 
 
+def skill_ci(y_true: np.ndarray, y_pred: np.ndarray, block: int, level: float = 0.90) -> tuple[float, float]:
+    """Moving-block bootstrap CI for skill = 1 - RMSE_model / RMSE_naive.
+
+    Blocks of ``block`` consecutive test points (the forecast horizon) keep the overlap-induced
+    autocorrelation of multi-day returns, so the interval is not overconfident.
+    """
+    rng = np.random.default_rng(SEED)
+    n = len(y_true)
+    block = max(min(block, n), 1)
+    starts_max = n - block + 1
+    n_blocks = int(np.ceil(n / block))
+    err_m, err_b = (y_true - y_pred) ** 2, y_true**2
+    skills = np.empty(N_BOOT)
+    for i in range(N_BOOT):
+        idx = (rng.integers(0, starts_max, n_blocks)[:, None] + np.arange(block)).ravel()[:n]
+        skills[i] = 1 - np.sqrt(err_m[idx].mean()) / np.sqrt(err_b[idx].mean())
+    lo, hi = np.quantile(skills, [(1 - level) / 2, 1 - (1 - level) / 2])
+    return float(lo), float(hi)
+
+
 def forecast(close: pd.Series, horizon: int) -> dict:
     close = close.dropna()
     close = close[close > 0]
@@ -116,7 +138,11 @@ def forecast(close: pd.Series, horizon: int) -> dict:
     base_m = _metrics(wf.y_true, np.zeros_like(wf.y_true))
     # Fraction of baseline error removed (positive = better than naive). Usually ~0 or negative.
     skill = 1 - model_m["rmse"] / base_m["rmse"]
-    base_m["directional_accuracy"] = float(np.mean(wf.y_true > 0))  # "always up" hit-rate, for context
+    up_rate = float(np.mean(wf.y_true > 0))
+    base_m["directional_accuracy"] = up_rate  # hit-rate of "always predict up", for context
+    ci_lo, ci_hi = skill_ci(wf.y_true, wf.y_pred, horizon)
+    n_test = int(len(wf.y_true))
+    n_independent = max(n_test // horizon, 1)  # test windows overlap: roughly this many are independent
 
     # Final model on all labelled data; predict from the latest feature row.
     final = _model().fit(X, y)
@@ -139,7 +165,8 @@ def forecast(close: pd.Series, horizon: int) -> dict:
             "high": round(last * float(np.exp(point * i / horizon + q90 * frac)), 4),
         })
 
-    beats = bool(skill > 0.02)
+    # "Beats" requires a meaningful gain AND a bootstrap interval that excludes zero.
+    beats = bool(skill > 0.02 and ci_lo > 0)
     notes = [
         "Interval is the empirical 10th-90th percentile of out-of-sample walk-forward errors "
         "(an ~80% band); real outcomes fall outside it regularly, especially in market stress.",
@@ -159,12 +186,17 @@ def forecast(close: pd.Series, horizon: int) -> dict:
         "path": path,
         "backtest": {
             "method": f"expanding-window walk-forward, {wf.n_folds} folds, {horizon}-day embargo",
-            "n_test_points": int(len(wf.y_true)),
+            "n_test_points": n_test,
+            "n_independent_tests": n_independent,
+            "small_sample": bool(n_independent < MIN_INDEPENDENT_TESTS),
+            "up_rate": up_rate,
+            "skill_ci_90": [ci_lo, ci_hi],
             "model": model_m,
             "naive_baseline": base_m,
             "skill_vs_baseline": float(skill),
             "beats_baseline": beats,
-            "note": "Overlapping multi-day windows make test points correlated; metrics are indicative only.",
+            "note": "Overlapping multi-day windows make test points correlated; the 90% interval accounts "
+                    "for that with a block bootstrap. Metrics are indicative only.",
         },
         "notes": notes,
     }

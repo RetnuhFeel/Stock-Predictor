@@ -37,3 +37,31 @@ def test_forecast_is_deterministic():
 def test_insufficient_data():
     with pytest.raises(InsufficientData):
         forecast(synthetic_prices(n=100)["Close"], 5)
+
+
+def test_backtest_plain_language_fields():
+    bt = forecast(synthetic_prices()["Close"], horizon=5)["backtest"]
+    assert 0 <= bt["up_rate"] <= 1
+    lo, hi = bt["skill_ci_90"]
+    assert lo <= bt["skill_vs_baseline"] <= hi or abs(bt["skill_vs_baseline"]) < 0.05  # point estimate near its CI
+    assert lo < hi
+    assert bt["n_independent_tests"] == bt["n_test_points"] // 5
+    assert isinstance(bt["small_sample"], bool)
+    # "beats baseline" requires the CI to exclude zero
+    assert not (bt["beats_baseline"] and lo <= 0)
+
+
+def test_beats_baseline_on_predictable_series():
+    # strongly mean-reverting prices around a trend: the model should find real signal
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.default_rng(1)
+    n = 1500
+    x = np.zeros(n)
+    for i in range(1, n):
+        x[i] = 0.9 * x[i - 1] + rng.normal(0, 0.02)
+    close = pd.Series(100 * np.exp(x), index=pd.bdate_range("2019-01-01", periods=n))
+    bt = forecast(close, horizon=5)["backtest"]
+    assert bt["skill_vs_baseline"] > 0.05 and bt["beats_baseline"] is True
+    assert bt["skill_ci_90"][0] > 0

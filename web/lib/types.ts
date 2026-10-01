@@ -1,4 +1,15 @@
-export type Quote = {
+export type Warning = { code: string; message: string };
+
+/** Freshness fields the backend adds to quote/history/forecast responses. */
+export type Freshness = {
+  data_as_of: string;
+  fetched_at: string;
+  is_delayed: boolean;
+  stale: boolean;
+  warnings: Warning[];
+};
+
+export type Quote = Freshness & {
   symbol: string;
   price: number;
   previous_close: number;
@@ -8,11 +19,29 @@ export type Quote = {
 };
 
 export type HistoryPoint = { date: string; close: number; volume: number };
-export type History = { symbol: string; range: string; points: HistoryPoint[] };
+export type History = Freshness & { symbol: string; range: string; points: HistoryPoint[] };
 
 export type Metrics = { rmse: number; mae: number; directional_accuracy: number | null };
 
-export type Forecast = {
+export type Backtest = {
+  method: string;
+  n_test_points: number;
+  /** ~ n_test_points / horizon: how many non-overlapping tests that is worth */
+  n_independent_tests?: number;
+  small_sample?: boolean;
+  /** share of test periods in which the price rose (what "always guess up" would score) */
+  up_rate?: number;
+  /** 90% bootstrap interval for skill_vs_baseline */
+  skill_ci_90?: [number, number];
+  model: Metrics;
+  naive_baseline: Metrics;
+  /** 1 - model RMSE / naive RMSE: positive = model error is lower than guessing "price stays flat" */
+  skill_vs_baseline: number;
+  beats_baseline: boolean;
+  note: string;
+};
+
+export type Forecast = Freshness & {
   symbol: string;
   horizon_days: number;
   last_close: number;
@@ -21,15 +50,7 @@ export type Forecast = {
   predicted_price: number;
   interval_80: { low: number; high: number };
   path: { date: string; mid: number; low: number; high: number }[];
-  backtest: {
-    method: string;
-    n_test_points: number;
-    model: Metrics;
-    naive_baseline: Metrics;
-    skill_vs_baseline: number;
-    beats_baseline: boolean;
-    note: string;
-  };
+  backtest: Backtest;
   notes: string[];
   disclaimer: string;
 };
