@@ -1,7 +1,8 @@
 import Foundation
 
 struct Stock: Identifiable {
-    let id = UUID()
+    // Stable identity (one row per symbol) so refreshes update rows instead of duplicating them.
+    var id: String { symbol }
     let symbol: String
     let name: String
     let price: Double
