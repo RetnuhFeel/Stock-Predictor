@@ -1,0 +1,20 @@
+# Local/dev convenience. For production, put both services behind HTTPS (see README).
+services:
+  api:
+    build: ./backend
+    environment:
+      # Origins allowed to call the API from a browser (comma-separated)
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      RATE_LIMIT_PER_MIN: ${RATE_LIMIT_PER_MIN:-60}
+    ports: ["8000:8000"]
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+      args:
+        # Inlined into the browser bundle at build time: must be reachable FROM THE BROWSER
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+    ports: ["3000:3000"]
+    depends_on: [api]
+    restart: unless-stopped
