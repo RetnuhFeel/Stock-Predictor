@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct HomeView: View {
-    @ObservedObject var viewModel = StockViewModel()
+    @StateObject private var viewModel = StockViewModel()
 
     var body: some View {
         NavigationView {
