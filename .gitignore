@@ -18,3 +18,17 @@ build/
 
 # Secrets (keep API keys out of version control)
 Secrets.xcconfig
+
+# Python / backend
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Web
+node_modules/
+.next/
+.env
+.env.*
+!.env.example
