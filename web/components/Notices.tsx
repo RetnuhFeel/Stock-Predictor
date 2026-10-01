@@ -1,5 +1,6 @@
 "use client";
 import { type Failure, friendlyMessage } from "@/lib/errors";
+import { useOnline } from "@/lib/online";
 import { useServerWaking } from "@/lib/serverStatus";
 
 /** Shown while any request is slow / being auto-retried: typically a free-tier server waking up. */
@@ -10,6 +11,17 @@ export function WakingBanner() {
     <div role="status" className="rounded-md border border-blue-300 bg-blue-50 px-3 py-2 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-200">
       <span aria-hidden="true">⏳ </span>
       <strong>Waking up the server…</strong> this can take up to a minute on the first visit. Hang tight — it will load automatically.
+    </div>
+  );
+}
+
+export function OfflineBanner() {
+  const online = useOnline();
+  if (online) return null;
+  return (
+    <div role="status" className="rounded-md border border-slate-500 bg-slate-100 px-3 py-2 text-sm text-slate-900 dark:border-slate-400 dark:bg-slate-800 dark:text-slate-100">
+      <span aria-hidden="true">📴 </span>
+      <strong>You&apos;re offline.</strong> Showing data last saved on this device — <strong>it may be outdated</strong>. It will refresh when you&apos;re back online.
     </div>
   );
 }

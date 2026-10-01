@@ -32,6 +32,22 @@ class InvalidRange(ApiError):
     code, status = "INVALID_RANGE", 400
 
 
+class InvalidRequest(ApiError):
+    code, status = "INVALID_REQUEST", 422
+
+
+class Unauthorized(ApiError):
+    code, status = "UNAUTHORIZED", 401
+
+
+class NotFound(ApiError):
+    code, status = "NOT_FOUND", 404
+
+
+class PayloadTooLarge(ApiError):
+    code, status = "PAYLOAD_TOO_LARGE", 413
+
+
 class InsufficientData(ApiError):
     """Not enough price history to run the forecast/backtest."""
     code, status = "INSUFFICIENT_DATA", 422

@@ -38,7 +38,7 @@ export function BacktestSummary({ backtest: b, horizon }: { backtest: Backtest; 
 
   return (
     <section aria-labelledby="bt-title" className="space-y-3 rounded-md border border-slate-200 p-4 dark:border-slate-800">
-      <h3 id="bt-title" className="font-semibold">How good is this model, really?</h3>
+      <h3 id="bt-title" className="font-semibold">How good is this model, really? <span className="font-normal text-slate-600 dark:text-slate-300">({horizon}-trading-day forecasts)</span></h3>
 
       <div role="status" className={`rounded-md border px-3 py-2 text-sm ${v.tone}`}>
         <p className="font-semibold"><span aria-hidden="true">{v.icon} </span>{v.label}</p>
@@ -74,7 +74,7 @@ export function BacktestSummary({ backtest: b, horizon }: { backtest: Backtest; 
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <caption className="sr-only">Model versus naive baseline error and direction accuracy</caption>
-          <thead><tr className="text-left text-slate-500"><th scope="col" className="py-1 pr-2">Measure</th><th scope="col" className="pr-2">Model</th><th scope="col">&ldquo;Stays the same&rdquo; guess</th></tr></thead>
+          <thead><tr className="text-left text-slate-700 dark:text-slate-300"><th scope="col" className="py-1 pr-2">Measure</th><th scope="col" className="pr-2">Model</th><th scope="col">&ldquo;Stays the same&rdquo; guess</th></tr></thead>
           <tbody>
             <tr className="border-t border-slate-100 dark:border-slate-800"><th scope="row" className="py-1 pr-2 text-left font-normal">Typical error ({horizon}-day move)</th><td className="pr-2">{pct(b.model.rmse, 2)}</td><td>{pct(b.naive_baseline.rmse, 2)}</td></tr>
             <tr className="border-t border-slate-100 dark:border-slate-800"><th scope="row" className="py-1 pr-2 text-left font-normal">Direction right</th><td className="pr-2">{hit == null ? "—" : pct(hit)}</td><td>{upRate == null ? "—" : `${pct(upRate)} (always “up”)`}</td></tr>

@@ -120,6 +120,14 @@ export function useApi<T>(path: string | null, opts: { cheap?: boolean } = {}) {
     };
   }, [path, attempt, cheap]);
 
+  // refresh as soon as connectivity returns
+  useEffect(() => {
+    if (!path) return;
+    const onOnline = () => retry();
+    window.addEventListener("online", onOnline);
+    return () => window.removeEventListener("online", onOnline);
+  }, [path, retry]);
+
   const current = state.path === path && path !== null;
   const data = current ? state.data : undefined;
   return {
