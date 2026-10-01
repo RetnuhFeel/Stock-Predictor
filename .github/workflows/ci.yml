@@ -36,3 +36,34 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
+
+  web-smoke:
+    # Headless Chrome + axe-core against the built app with a mocked API (fully offline, no market data needed).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            web/e2e/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+        env:
+          NEXT_PUBLIC_API_BASE_URL: http://api.test
+      - run: npm ci
+        working-directory: web/e2e
+      - name: Serve and run smoke test
+        working-directory: web
+        env:
+          CHROME: /usr/bin/google-chrome
+        run: |
+          npx next start -p 3000 > /tmp/next.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://localhost:3000 >/dev/null && break; sleep 1; done
+          cd e2e && node smoke.mjs
+      - if: failure()
+        run: tail -50 /tmp/next.log || true

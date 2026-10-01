@@ -9,12 +9,12 @@ export function DraftNotice() {
   );
 }
 
-export function Page({ title, children }: { title: string; children: React.ReactNode }) {
+export function Page({ title, children, draft = true }: { title: string; children: React.ReactNode; draft?: boolean }) {
   return (
-    <main id="main" tabIndex={-1} className="mx-auto max-w-2xl space-y-4 px-4 py-8 text-sm leading-relaxed [&_h2]:mt-6 [&_h2]:text-lg [&_h2]:font-semibold [&_li]:ml-5 [&_li]:list-disc">
+    <main id="main" tabIndex={-1} className="mx-auto max-w-3xl space-y-4 px-4 py-8 text-sm leading-relaxed [&_h2]:mt-6 [&_h2]:text-lg [&_h2]:font-semibold [&_li]:ml-5 [&_li]:list-disc">
       <Link href="/" className="text-blue-800 underline dark:text-blue-300">← Back to app</Link>
       <h1 className="text-2xl font-bold">{title}</h1>
-      <DraftNotice />
+      {draft && <DraftNotice />}
       {children}
     </main>
   );

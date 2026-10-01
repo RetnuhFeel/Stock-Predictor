@@ -1,0 +1,19 @@
+name: Bug report
+description: Something is broken or looks wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes: { value: "Please don't include personal data or secrets. For security issues use the private process in SECURITY.md instead." }
+  - type: textarea
+    id: what
+    attributes: { label: What happened?, description: What did you expect instead? }
+    validations: { required: true }
+  - type: textarea
+    id: steps
+    attributes: { label: Steps to reproduce, placeholder: "1. Open ... 2. Click ..." }
+  - type: input
+    id: env
+    attributes: { label: Browser / device, placeholder: "Chrome 130 on Android" }
+  - type: input
+    id: rid
+    attributes: { label: Request ID (optional), description: "Shown in the X-Request-ID response header, if you can see it." }

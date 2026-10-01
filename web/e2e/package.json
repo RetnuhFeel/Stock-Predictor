@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "description": "Optional headless-browser checks (not run in CI). See README.",
-  "scripts": { "test": "node run.mjs" },
+  "scripts": { "test": "node run.mjs", "smoke": "node smoke.mjs", "screenshots": "node screenshots.mjs" },
   "dependencies": { "axe-core": "^4.10.0", "playwright-core": "^1.50.0" }
 }

@@ -151,6 +151,38 @@ const settle = (page) => page.waitForLoadState("networkidle").catch(() => {});
   await context.close();
 }
 
+// ---- 3b. /model page: gate-exempt, honest report card, axe (light + dark)
+for (const dark of [false, true]) {
+  const { context, page } = await fresh({ dark, accept: false });
+  await page.goto(`${WEB}/model`);
+  ok((await page.getByRole("dialog").count()) === 0, `/model is gate-exempt (${dark ? "dark" : "light"})`);
+  await page.getByRole("table").waitFor({ timeout: 120000 });
+  const rows = await page.locator("table tbody tr").count();
+  ok(rows >= 3, `report card table lists ${rows} tickers`);
+  ok(await page.getByText(/not financial advice/i).first().isVisible(), "/model shows the disclaimer");
+  ok(await page.getByText(/Not better than guessing|Inconclusive|Better than guessing/).first().isVisible(), "/model shows plain-language verdicts");
+  ok((await page.locator("table th[scope=col]").count()) >= 6 && (await page.locator("table th[scope=row]").count()) === rows, "report table has proper headers");
+  await axe(page, `/model (${dark ? "dark" : "light"})`);
+  await context.close();
+}
+{
+  const { context, page } = await fresh({ accept: true });
+  ok((await page.locator("nav[aria-label=Site] a[href='/model']").count()) === 1, "nav links to /model");
+  ok((await page.locator("footer a[href='/model']").count()) === 1, "footer links to /model");
+  ok((await page.getByText("Support this project").count()) === 0, "no support link when NEXT_PUBLIC_SUPPORT_URL is unset");
+  await context.close();
+}
+{
+  const { context, page } = await fresh({ accept: false });
+  await page.route("**/api/model-report", (r) => r.fulfill({ status: 502, contentType: "application/json", body: JSON.stringify({ error: { code: "DATA_UNAVAILABLE", message: "x", retryable: false } }) }));
+  await page.goto(`${WEB}/model`);
+  await page.getByText(/Report card unavailable/).waitFor({ timeout: 30000 });
+  ok(true, "/model failure state is friendly and the methodology text remains");
+  ok(await page.getByText(/Baseline:/).isVisible(), "methodology still visible on failure");
+  await axe(page, "/model failure state");
+  await context.close();
+}
+
 // ---- 4. Offline watchlist
 {
   const { context, page } = await fresh();

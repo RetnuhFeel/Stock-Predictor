@@ -68,3 +68,26 @@ export type Compare = Freshness & {
   failed: { symbol: string; code: string; message: string }[];
   base: string;
 };
+
+export type ReportRow = {
+  symbol: string;
+  verdict: "better" | "inconclusive" | "not_better";
+  skill_vs_baseline: number;
+  skill_ci_90: [number, number];
+  model_rmse: number;
+  baseline_rmse: number;
+  hit_rate: number | null;
+  up_rate: number;
+  n_test_points: number;
+  n_independent_tests: number;
+  small_sample: boolean;
+  data_as_of: string;
+};
+export type ModelReport = Freshness & {
+  horizon_days: number;
+  rows: ReportRow[];
+  failed: { symbol: string; code: string; message: string }[];
+  method: string;
+  summary: { better: number; inconclusive: number; not_better: number; total: number };
+  disclaimer: string;
+};
