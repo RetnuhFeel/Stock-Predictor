@@ -50,6 +50,12 @@ class TTLCache:
     def get_or_set(self, key: Any, ttl: float, factory: Callable[[], Any]) -> Any:
         return self.fetch(key, ttl, factory).value
 
+    def clear_prefix(self, prefix: str) -> None:
+        """Drop entries whose key is a tuple starting with ``prefix``."""
+        with self._lock:
+            for k in [k for k in self._data if isinstance(k, tuple) and k and k[0] == prefix]:
+                self._data.pop(k, None)
+
     def clear(self) -> None:
         with self._lock:
             self._data.clear()

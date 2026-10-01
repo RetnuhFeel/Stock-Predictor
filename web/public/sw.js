@@ -7,11 +7,11 @@
    - Only successful (200, same-origin) responses are ever stored. Old caches are deleted on activate.
    - The page tells us which assets it loaded (message below) so the very first visit is fully available offline,
      even though those requests happened before this worker controlled the page. */
-const VERSION = "v3";
+const VERSION = "v4";
 const SHELL = `shell-${VERSION}`;
 const ASSETS = `assets-${VERSION}`;
 const OFFLINE_URL = "/offline.html";
-const PRECACHE = [OFFLINE_URL, "/", "/terms", "/privacy", "/model", "/icon-192.png"];
+const PRECACHE = [OFFLINE_URL, "/", "/terms", "/privacy", "/model", "/track-record", "/icon-192.png"];
 
 const cacheable = (res) => res && res.ok && res.status === 200 && res.type === "basic";
 

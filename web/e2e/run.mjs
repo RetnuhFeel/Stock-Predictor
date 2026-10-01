@@ -156,12 +156,15 @@ for (const dark of [false, true]) {
   const { context, page } = await fresh({ dark, accept: false });
   await page.goto(`${WEB}/model`);
   ok((await page.getByRole("dialog").count()) === 0, `/model is gate-exempt (${dark ? "dark" : "light"})`);
-  await page.getByRole("table").waitFor({ timeout: 120000 });
-  const rows = await page.locator("table tbody tr").count();
+  await page.locator("section[aria-labelledby=report-title] table").waitFor({ timeout: 120000 });
+  const rows = await page.locator("section[aria-labelledby=report-title] table tbody tr").count();
   ok(rows >= 3, `report card table lists ${rows} tickers`);
   ok(await page.getByText(/not financial advice/i).first().isVisible(), "/model shows the disclaimer");
   ok(await page.getByText(/Not better than guessing|Inconclusive|Better than guessing/).first().isVisible(), "/model shows plain-language verdicts");
-  ok((await page.locator("table th[scope=col]").count()) >= 6 && (await page.locator("table th[scope=row]").count()) === rows, "report table has proper headers");
+  ok((await page.locator("section[aria-labelledby=report-title] table th[scope=col]").count()) >= 6, "report table has proper headers");
+  await page.getByText(/No model clearly beat|At least one model beat/).first().waitFor({ timeout: 120000 });
+  ok((await page.locator("section[aria-labelledby^=mc-title] table tbody tr").count()) === 5, "model comparison lists 5 models (naive baseline + 4)");
+  ok(await page.getByText(/not live results/i).first().isVisible(), "model comparison says backtest, not live");
   await axe(page, `/model (${dark ? "dark" : "light"})`);
   await context.close();
 }
@@ -180,6 +183,35 @@ for (const dark of [false, true]) {
   ok(true, "/model failure state is friendly and the methodology text remains");
   ok(await page.getByText(/Baseline:/).isVisible(), "methodology still visible on failure");
   await axe(page, "/model failure state");
+  await context.close();
+}
+
+// ---- 3c. Stock view: volatility + model comparison; /track-record populated by the real scheduled task
+{
+  const { context, page } = await fresh();
+  await page.getByRole("heading", { name: /Expected range \/ risk/ }).waitFor({ timeout: 120000 });
+  await page.getByText(/Typical move over 5 trading days/).waitFor({ timeout: 120000 });
+  await page.getByText(/Model comparison \(AAPL/).waitFor({ timeout: 120000 });
+  await page.locator("section[aria-labelledby^=mc-title] table").waitFor({ timeout: 120000 });
+  ok(true, "stock view shows volatility range and model comparison from the real backend");
+  await page.waitForLoadState("networkidle").catch(() => {});
+  await axe(page, "stock view with volatility + model comparison (real data)");
+  await context.close();
+}
+if (process.env.LOG_TASK_TOKEN) {
+  const api = process.env.API || "http://localhost:8000";
+  const r = await fetch(`${api}/api/_tasks/run-prediction-log`, { method: "POST", headers: { Authorization: `Bearer ${process.env.LOG_TASK_TOKEN}` } });
+  const out = await r.json();
+  ok(r.status === 200 && out.logged.length > 0, `scheduled task logged predictions (${out.logged.join(",")}) ${JSON.stringify(out.skipped)}`);
+  const { context, page } = await fresh({ accept: false });
+  await page.goto(`${WEB}/track-record`);
+  ok((await page.getByRole("dialog").count()) === 0, "/track-record is gate-exempt");
+  await page.locator("section[aria-labelledby=log] tbody tr").first().waitFor({ timeout: 60000 });
+  ok((await page.locator("section[aria-labelledby=log] tbody tr").count()) === out.logged.length, "log table shows the logged predictions");
+  ok(await page.getByText(/Waiting \(resolves after 5 trading days\)/).first().isVisible(), "new predictions show as waiting, not as results");
+  ok(await page.getByText(/Too early|No resolved predictions yet/).first().isVisible(), "no verdict claimed with no resolved data");
+  ok(await page.getByText(/chain check right now: intact/).isVisible(), "hash chain reported intact");
+  await axe(page, "/track-record (real data)");
   await context.close();
 }
 

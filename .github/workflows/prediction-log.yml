@@ -1,0 +1,48 @@
+name: Log and resolve predictions
+
+# Once per weekday after the US market close, ask the API to (1) record a prediction for the fixed ticker
+# allowlist and (2) fill in outcomes for older predictions whose horizon has passed.
+# Needs two repository settings (nothing is stored in the repo):
+#   Secrets  -> LOG_TASK_TOKEN   (must equal the LOG_TASK_TOKEN env var on the API service)
+#   Variables -> API_BASE_URL    (e.g. https://stock-predictor-api-2dnn.onrender.com)
+# If either is missing the job exits successfully with a notice, so forks don't fail.
+# GitHub scheduled runs can be delayed or skipped, and are disabled after 60 days without repo activity.
+on:
+  schedule:
+    - cron: "30 22 * * 1-5"   # 22:30 UTC = 6:30pm EDT / 5:30pm EST, after the 4pm ET close
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: prediction-log
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      API_BASE_URL: ${{ vars.API_BASE_URL }}
+      LOG_TASK_TOKEN: ${{ secrets.LOG_TASK_TOKEN }}
+    steps:
+      - name: Call the prediction-log task
+        shell: bash
+        run: |
+          if [ -z "$API_BASE_URL" ] || [ -z "$LOG_TASK_TOKEN" ]; then
+            echo "::notice::API_BASE_URL variable and/or LOG_TASK_TOKEN secret not set; nothing to do."
+            exit 0
+          fi
+          url="${API_BASE_URL%/}/api/_tasks/run-prediction-log"
+          # A cold start on the free tier can take about a minute, so allow 120s per attempt and retry.
+          for attempt in 1 2 3 4; do
+            code=$(curl -sS -o /tmp/out.json -w '%{http_code}' -m 120 -X POST \
+              -H "Authorization: Bearer $LOG_TASK_TOKEN" "$url" || echo 000)
+            echo "attempt $attempt: HTTP $code"
+            [ "$code" = "200" ] && { cat /tmp/out.json; echo; exit 0; }
+            [ "$code" = "401" ] || [ "$code" = "404" ] && { echo "::error::Task rejected (HTTP $code): check LOG_TASK_TOKEN on both sides."; cat /tmp/out.json; exit 1; }
+            sleep 30
+          done
+          echo "::error::Prediction-log task failed after retries."
+          cat /tmp/out.json 2>/dev/null || true
+          exit 1

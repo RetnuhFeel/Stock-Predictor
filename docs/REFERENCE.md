@@ -26,6 +26,11 @@ Detailed configuration, API behaviour and operations notes. For the overview see
 | `SENTRY_DSN` | backend | Optional. Only used if you also `pip install sentry-sdk` (not in `requirements.txt`); no PII is sent |
 | `MODEL_REPORT_TTL_S` | backend | Cache lifetime of the public `/api/model-report` (default 21600 = 6 h) |
 | `MODEL_REPORT_RATE_PER_MIN` | backend | Stricter per-client limit for `/api/model-report` (default 6) |
+| `LOG_TASK_TOKEN` | backend | Enables `POST /api/_tasks/run-prediction-log` (send `Authorization: Bearer <token>`). **Unset = endpoint returns 404.** Use a long random value; set it as a secret |
+| `DATABASE_URL` | backend | Storage for the prediction log. Unset = SQLite file in the temp dir (**erased on every redeploy/restart on Render's free tier**). Set a Postgres URL (`postgresql://…`) for durable storage |
+| `PREDICTION_LOG_TTL_S` | backend | Cache lifetime of `GET /api/prediction-log` (default 120) |
+| `MODELS_TTL_S` | backend | Cache lifetime of model comparison / volatility results (default 3600) |
+| `HEAVY_RATE_PER_MIN` | backend | Per-client limit for `/api/compare-models` and `/api/volatility` (default 20, on top of the global limit) |
 | `NEXT_PUBLIC_SUPPORT_URL` | web (build time) | Optional `https://` URL for a "Support this project" footer link. Unset = nothing is shown |
 | `NEXT_PUBLIC_ERROR_REPORTING` | web (build time) | `true` makes the browser POST sanitised error reports (message, stack, path) to the API. Needs `CLIENT_ERROR_LOGGING=true` on the API |
 
@@ -40,10 +45,31 @@ Detailed configuration, API behaviour and operations notes. For the overview see
 | `GET /api/compare?symbols=A,B&range=` | 2–5 symbols, normalised % change |
 | `GET /api/news/{symbol}` | Headlines (link-out only) |
 | `GET /api/model-report` | Cached backtest report card for SPY, AAPL, MSFT, NVDA, TSLA at 5 days (fixed list, no user input, own rate limit) |
+| `GET /api/compare-models/{symbol}?horizon=1..60` | Naive, drift, EWMA, ridge-AR and gradient boosting, each walk-forward (+ embargo) vs. naive: error, skill with 90% bootstrap range, direction hit rate, n tests. Cached, own rate limit |
+| `GET /api/volatility/{symbol}?horizon=1..60` | Realised-volatility forecast (EWMA headline, HAR-style, vs. "recent 21-day vol"), annualised vol, 1-sigma risk range, backtest coverage |
+| `GET /api/prediction-log?limit=&offset=&symbol=&status=` | Public, paginated, cached live prediction log + live scorecard (resolved rows only) |
+| `POST /api/_tasks/run-prediction-log` | Scheduled job: log predictions for the fixed ticker list, resolve old ones. Needs `LOG_TASK_TOKEN` (disabled otherwise) |
 | `GET /api/search?q=` | Symbol search |
 | `GET /api/_stats`, `POST /api/_client-error` | Opt-in observability (disabled unless configured) |
 
 Interactive docs: `/docs` (Swagger UI) on any running API.
+
+## Prediction log (live track record)
+
+- **What is recorded:** once per weekday (GitHub Actions cron, 22:30 UTC, after the US close) the API stores its 5-day forecast for a **fixed ticker list** (`SPY, AAPL, MSFT, NVDA, TSLA`): prediction time, last price, predicted return, 80% interval and a snapshot of the backtest verdict. Forecasts served to visitors are **never** logged, so storage is bounded and nothing about any visitor is recorded. Stale data is never logged (it could already contain the outcome).
+- **Immutability:** a row is inserted once per (symbol, horizon, base date); only its outcome fields are filled in later, once. Each row stores a SHA-256 hash chained to the previous row, and `/api/prediction-log` reports `chain_ok`. This is tamper-*evidence*, not proof: whoever controls the database could rebuild the chain.
+- **Resolution:** when `horizon` trading days have passed, the realised log return is computed from the same adjusted price series for both ends.
+- **Scorecard:** live results only (never mixed with backtests): skill vs. "flat" (one score per forecast date so same-day tickers aren't counted as independent), direction hit rate vs. "always up", 80% interval coverage. No verdict is given below 30 independent periods ("too early"), which takes months.
+- **Storage and data loss:** SQLite by default. **Render's free tier has an ephemeral disk: the SQLite log is erased on every redeploy or restart**, and the track-record page says so. For a durable record set `DATABASE_URL` to a Postgres URL (e.g. a free Render Postgres, which has its own expiry limits on the free plan, or Neon/Supabase). Only SQLite is covered by automated tests; the Postgres path uses the same SQLAlchemy code but is untested here.
+- **Scheduler setup (you must do this):** in the GitHub repo, add the secret **`LOG_TASK_TOKEN`** (Settings → Secrets and variables → Actions → Secrets) and the variable **`API_BASE_URL`** (… → Variables), e.g. `https://stock-predictor-api-2dnn.onrender.com`. Set the *same* `LOG_TASK_TOKEN` value as an env var on the Render API service. Until both exist the workflow exits with a notice and the endpoint returns 404. You can also run it by hand from the Actions tab (*Log and resolve predictions → Run workflow*).
+- **Privacy:** the log contains only market forecasts for public tickers; no visitor data. The privacy page needed no change.
+
+## Models and volatility
+
+- **Point-forecast models** (`backend/app/models.py`, one small interface): naive (flat), drift (average past return), EWMA mean, ridge autoregression on past returns/volatility, gradient boosting (the main forecast). All are judged by the same expanding-window walk-forward with a gap of at least `horizon` days, by RMSE skill vs. naive with a block-bootstrap 90% range. "Better" needs the whole range above zero. Because several models are tried, a single "win" can be luck; the response says so and the live track record is the real test.
+- **Volatility** (`backend/app/volatility.py`): target is realised volatility over the horizon. Naive = trailing 21-day vol; EWMA (RiskMetrics λ=0.94, headline model fixed in advance); HAR-style regression of log future vol on 5/22/66-day trailing vol. Errors are on the log scale. The "risk range" is 1-sigma (about 68% if returns were normal); the backtest coverage shows how often reality stayed inside. No GARCH: `arch`/`statsmodels` were skipped to keep the image light.
+- **Compute on the free tier:** each request is one symbol with cheap models (about 0.5 s locally), cached per symbol/horizon/day, with its own rate limit.
+- **Not included on purpose:** neural or pretrained time-series models (e.g. Chronos, TimesFM) are too heavy for the API. Evaluate them offline with the same walk-forward + embargo harness (`compare_models` accepts any object with a `predict(ctx, train_end, test)` method), and add one here only if it beats the baselines in a log you can show.
 
 ## Extras
 

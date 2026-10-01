@@ -3,10 +3,13 @@ from __future__ import annotations
 import hmac
 import json
 import logging
+import os
+import tempfile
 import threading
 import time
 from collections import defaultdict, deque
 
+import numpy as np
 import pandas as pd
 from fastapi import Depends, FastAPI, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -17,7 +20,8 @@ from . import config
 from .cache import Fetched, TTLCache
 from .errors import ApiError, InvalidRange, InvalidRequest, NotFound, PayloadTooLarge, Unauthorized
 from .forecast import forecast
-from .freshness import describe, describe_fetch
+from .freshness import describe, describe_fetch, today_ny
+from .models import compare_models
 from .observability import (
     Stats,
     fingerprint,
@@ -30,7 +34,10 @@ from .observability import (
     setup_logging,
 )
 from .providers import BaseProvider, create_provider
+from .storage import PredictionStore, now_iso
 from .symbols import normalize_symbol
+from .trackrecord import public_row, record_from_forecast, resolve_pending, scorecard
+from .volatility import forecast_volatility
 
 log = setup_logging()
 init_sentry(config.SENTRY_DSN, log)
@@ -87,6 +94,9 @@ async def observe_and_limit(request: Request, call_next):
         retry = None
         if path.startswith("/api/") and config.RATE_LIMIT_PER_MIN > 0:
             retry = _limited("api", _client_id(request), config.RATE_LIMIT_PER_MIN, time.monotonic())
+        heavy = path.startswith(("/api/compare-models/", "/api/volatility/"))
+        if retry is None and heavy and config.RATE_LIMIT_PER_MIN > 0:
+            retry = _limited("heavy", _client_id(request), config.HEAVY_RATE_PER_MIN, time.monotonic())
         if retry is None and path == "/api/model-report" and config.RATE_LIMIT_PER_MIN > 0:
             retry = _limited("report", _client_id(request), config.MODEL_REPORT_RATE_PER_MIN, time.monotonic())
         if retry is not None:
@@ -374,3 +384,107 @@ def model_report(provider: BaseProvider = Depends(get_provider)):
                         "not_better": sum(r["verdict"] == "not_better" for r in v["rows"]),
                         "total": len(v["rows"])},
             **describe(v["as_of"], v["fetched_at"], got.stale or v["stale"]), "disclaimer": config.DISCLAIMER}
+
+
+# --- model comparison & volatility (bounded: one symbol, five cheap models, cached) ----------------------
+@app.get("/api/compare-models/{symbol}")
+def compare_models_endpoint(symbol: str, horizon: int = Query(5, ge=1, le=config.MAX_HORIZON),
+                            provider: BaseProvider = Depends(get_provider)):
+    """Walk-forward (+ embargo) error of several simple models vs the naive 'price stays flat' baseline."""
+    sym = normalize_symbol(symbol)
+    hist = _history(provider, sym, "5y")
+    df = hist.value
+    key = ("models", provider.name, sym, horizon, df.index[-1].date())
+    result = cache.fetch(key, config.MODELS_TTL_S,
+                         lambda: {"symbol": sym, **compare_models(df["Close"], horizon)}).value
+    return {**result, **_freshness(df, hist), "disclaimer": config.DISCLAIMER}
+
+
+@app.get("/api/volatility/{symbol}")
+def volatility_endpoint(symbol: str, horizon: int = Query(5, ge=1, le=config.MAX_HORIZON),
+                        provider: BaseProvider = Depends(get_provider)):
+    """Forecast realised volatility and a 1-sigma risk range, judged walk-forward vs 'recent realised vol'."""
+    sym = normalize_symbol(symbol)
+    hist = _history(provider, sym, "5y")
+    df = hist.value
+    key = ("vol", provider.name, sym, horizon, df.index[-1].date())
+    result = cache.fetch(key, config.MODELS_TTL_S,
+                         lambda: {"symbol": sym, **forecast_volatility(df["Close"], horizon)}).value
+    return {**result, **_freshness(df, hist), "disclaimer": config.DISCLAIMER}
+
+
+# --- live prediction log -------------------------------------------------------------------------------
+_store: PredictionStore | None = None
+_store_lock = threading.Lock()
+
+
+def get_store() -> PredictionStore:
+    global _store
+    with _store_lock:
+        if _store is None:
+            url = config.DATABASE_URL or "sqlite:///" + os.path.join(tempfile.gettempdir(), "prediction_log.db")
+            _store = PredictionStore(url)
+        return _store
+
+
+def _require_task_token(request: Request) -> None:
+    if not config.LOG_TASK_TOKEN:
+        raise NotFound("Not found.")
+    supplied = request.headers.get("authorization", "")
+    if not hmac.compare_digest(supplied.encode(), f"Bearer {config.LOG_TASK_TOKEN}".encode()):
+        raise Unauthorized("Missing or invalid task token.")
+
+
+@app.post("/api/_tasks/run-prediction-log")
+def run_prediction_log(request: Request, provider: BaseProvider = Depends(get_provider),
+                       store: PredictionStore = Depends(get_store)):
+    """Scheduled job (GitHub Actions): log today's predictions for the fixed allowlist, then resolve old ones.
+    Disabled (404) unless LOG_TASK_TOKEN is set. Idempotent: one row per (symbol, horizon, base date)."""
+    _require_task_token(request)
+    logged, skipped = [], []
+    for sym in config.LOG_SYMBOLS:
+        try:
+            result, df, hist = _forecast_for(provider, sym, config.LOG_HORIZON)
+        except ApiError as exc:
+            skipped.append({"symbol": sym, "reason": exc.code})
+            continue
+        base = df.index[-1].date()
+        lag = int(np.busday_count(base, today_ny()))
+        if hist.stale or lag > 3:
+            # Stale data could mean the outcome is already known (hindsight), so it is never logged.
+            skipped.append({"symbol": sym, "reason": "STALE_DATA"})
+            continue
+        if store.add_prediction(record_from_forecast(result, df["Close"])):
+            logged.append(sym)
+        else:
+            skipped.append({"symbol": sym, "reason": "ALREADY_LOGGED"})
+
+    def history_for(sym: str):
+        return _history(provider, sym, "5y").value["Close"]
+
+    resolved = resolve_pending(store, history_for)
+    cache.clear_prefix("plog")
+    log_event(log, "prediction_log_run", logged=len(logged), skipped=len(skipped), **resolved)
+    return {"logged": logged, "skipped": skipped, **resolved, "ran_at": now_iso()}
+
+
+@app.get("/api/prediction-log")
+def prediction_log(limit: int = Query(25, ge=1, le=100), offset: int = Query(0, ge=0, le=100_000),
+                   symbol: str | None = Query(None, max_length=16), status: str | None = Query(None),
+                   store: PredictionStore = Depends(get_store)):
+    """Public, read-only, paginated live prediction log plus the live scorecard (resolved rows only)."""
+    sym = normalize_symbol(symbol) if symbol else None
+    if status not in (None, "pending", "resolved"):
+        raise InvalidRequest("status must be 'pending' or 'resolved'.")
+
+    def build():
+        pg = store.page(limit, offset, sym, status)
+        rows = store.all_rows()
+        return {"items": [public_row(r) for r in pg.items], "total": pg.total, "limit": limit, "offset": offset,
+                "scorecard": scorecard(rows, config.LOG_HORIZON), "chain_ok": store.verify_chain(),
+                "symbols": config.LOG_SYMBOLS, "horizon_days": config.LOG_HORIZON,
+                "storage": {"backend": store.backend, "durable": store.backend != "sqlite"}}
+
+    got = cache.fetch(("plog", sym, status, limit, offset), config.PREDICTION_LOG_TTL_S, build)
+    return {**got.value, **describe_fetch(got.fetched_at, False), "disclaimer": config.DISCLAIMER}
+

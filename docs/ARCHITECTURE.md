@@ -23,13 +23,22 @@ flowchart LR
         PROV["Provider interface"]
         FC["Forecast pipeline<br/>features → model → intervals"]
         BT["Backtest<br/>walk-forward + embargo<br/>vs. naive baseline<br/>+ block bootstrap CI"]
+        MOD["Model comparison + volatility<br/>naive · drift · EWMA · ridge-AR · GBM<br/>same walk-forward harness"]
+        LOG["Prediction log<br/>fixed tickers, scheduled only<br/>hash-chained rows"]
+        DB[("SQLite (ephemeral on free tier)<br/>or Postgres via DATABASE_URL")]
         API --> MW
         API --> CACHE
         CACHE --> PROV
         API --> FC
         FC --> BT
         FC --> CACHE
+        API --> MOD
+        MOD --> BT
+        API --> LOG
+        LOG --> DB
     end
+
+    GHA["GitHub Actions cron<br/>weekdays after US close"] -- "POST /api/_tasks/run-prediction-log<br/>(bearer token)" --> API
 
     PROV --> YF["yfinance (default)"]
     PROV --> TD["Twelve Data (API key)"]
@@ -74,6 +83,9 @@ sequenceDiagram
 | Freshness | `backend/app/freshness.py` | `data_as_of`, `fetched_at`, `is_delayed`, `stale`, `warnings` |
 | Forecast + backtest | `backend/app/forecast.py` | Gradient boosting on simple features; walk-forward CV; bootstrap CI |
 | Model report | `GET /api/model-report` | Fixed ticker list and horizon, cached 6 h, own rate limit, builds serialised |
+| Model comparison | `backend/app/models.py`, `GET /api/compare-models/{symbol}` | Five models behind one interface, same walk-forward harness, per-model skill vs. naive with bootstrap CI |
+| Volatility | `backend/app/volatility.py`, `GET /api/volatility/{symbol}` | EWMA headline + HAR-style vs. "recent vol"; 1-sigma risk range with backtest coverage |
+| Prediction log | `backend/app/storage.py`, `trackrecord.py`, `GET /api/prediction-log` | Fixed allowlist logged by a token-protected scheduled task; outcomes resolved later; hash-chained rows; public read endpoint |
 | Observability | `backend/app/observability.py` | Request IDs, JSON logs without IPs, opt-in aggregate stats and client error log |
 
 ## Design decisions
@@ -85,6 +97,10 @@ sequenceDiagram
 **Error and freshness model.** Every non-2xx response has one shape with stable codes (`INVALID_SYMBOL`, `DATA_UNAVAILABLE`, `UPSTREAM_TIMEOUT`, `RATE_LIMITED`, …) so the UI can show friendly messages and decide whether to retry. Every data response says how old it is. If the provider fails but a recent copy exists, the API serves it flagged `stale` rather than failing, and the UI labels it "may be outdated".
 
 **Offline strategy.** The service worker caches only the app shell and hashed static assets (network-first navigations with an offline fallback). It never touches `/api` and never stores error responses, so it can't serve stale or broken API data by accident. "Last known" data lives in `localStorage`, written by the page after a successful fetch, and is always shown with an outdated label when it isn't live.
+
+**Backtest vs. live evidence.** Backtests (even careful ones) are researcher-controlled: models and settings get tweaked after seeing results. So the app keeps a separate live prediction log: forecasts for a fixed ticker list are stored *before* the outcome exists, never edited (only the outcome is filled in once), hash-chained, and scored separately with no verdict until there are enough independent periods. The UI never presents backtest numbers as live results. Several models are compared, so the UI warns that one "win" can be luck.
+
+**Why a storage abstraction.** Render's free disk is ephemeral. SQLAlchemy Core lets the same code run on a SQLite file (default, zero setup, lost on redeploy) or Postgres (`DATABASE_URL`, durable), and the page tells visitors which one is in use.
 
 **Privacy by construction.** No accounts or cookies; watchlist and alerts stay on the device. Server logs omit IPs, user agents and query strings; stats are in-memory aggregates behind an admin token; client error reports are opt-in, sanitised, size- and rate-limited.
 

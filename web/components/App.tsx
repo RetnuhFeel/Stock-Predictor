@@ -33,6 +33,7 @@ export function App() {
           </h1>
           <nav aria-label="Site" className="flex items-center gap-3 text-sm">
             <Link href="/model" className="text-blue-800 underline dark:text-blue-300">Model report</Link>
+            <Link href="/track-record" className="text-blue-800 underline dark:text-blue-300">Track record</Link>
             <ThemeToggle />
           </nav>
         </header>
