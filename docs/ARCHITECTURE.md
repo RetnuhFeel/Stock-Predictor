@@ -7,8 +7,8 @@
 ```mermaid
 flowchart LR
     subgraph Browser["Browser (PWA)"]
-        UI["Next.js UI<br/>watchlist · forecast · compare · /model"]
-        LS[("localStorage<br/>watchlist, alerts,<br/>last-good data")]
+        UI["Next.js UI<br/>lists · forecast · compare · /model"]
+        LS[("localStorage<br/>lists, alerts,<br/>last-good data")]
         SW["Service worker<br/>app shell + static assets only"]
         UI <--> LS
         UI --- SW
@@ -83,6 +83,7 @@ sequenceDiagram
 | Freshness | `backend/app/freshness.py` | `data_as_of`, `fetched_at`, `is_delayed`, `stale`, `warnings` |
 | Forecast + backtest | `backend/app/forecast.py` | Gradient boosting on simple features; walk-forward CV; bootstrap CI |
 | Model report | `GET /api/model-report` | Fixed ticker list and horizon, cached 6 h, own rate limit, builds serialised |
+| Trending | `backend/app/universe.py`, `GET /api/trending` | Fixed ~106-ticker universe, one batched provider download, close-to-close return over N days, cached with stale-if-error. A momentum screen, not a prediction |
 | Model comparison | `backend/app/models.py`, `GET /api/compare-models/{symbol}` | Five models behind one interface, same walk-forward harness, per-model skill vs. naive with bootstrap CI |
 | Volatility | `backend/app/volatility.py`, `GET /api/volatility/{symbol}` | EWMA headline + HAR-style vs. "recent vol"; 1-sigma risk range with backtest coverage |
 | Prediction log | `backend/app/storage.py`, `trackrecord.py`, `GET /api/prediction-log` | Fixed allowlist logged by a token-protected scheduled task; outcomes resolved later; hash-chained rows; public read endpoint |
@@ -102,7 +103,7 @@ sequenceDiagram
 
 **Why a storage abstraction.** Render's free disk is ephemeral. SQLAlchemy Core lets the same code run on a SQLite file (default, zero setup, lost on redeploy) or Postgres (`DATABASE_URL`, durable), and the page tells visitors which one is in use.
 
-**Privacy by construction.** No accounts or cookies; watchlist and alerts stay on the device. Server logs omit IPs, user agents and query strings; stats are in-memory aggregates behind an admin token; client error reports are opt-in, sanitised, size- and rate-limited.
+**Privacy by construction.** No accounts or cookies; lists and alerts stay on the device. Server logs omit IPs, user agents and query strings; stats are in-memory aggregates behind an admin token; client error reports are opt-in, sanitised, size- and rate-limited.
 
 **Bounded cost.** The only compute-heavy public endpoints are forecast (cached per symbol/horizon/day) and the model report (fixed inputs, cached, serialised, stricter rate limit). The in-memory cache and rate limiter assume one instance; move them to Redis before scaling out.
 

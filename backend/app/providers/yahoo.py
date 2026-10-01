@@ -47,6 +47,20 @@ class YahooProvider(BaseProvider):
 
         return with_retries(once)
 
+    def batch_history(self, symbols: list[str], period: str) -> dict[str, pd.DataFrame]:
+        """One multi-ticker download (a single HTTP burst instead of N sequential calls)."""
+        def once() -> dict[str, pd.DataFrame]:
+            try:
+                import yfinance as yf
+
+                raw = yf.download(symbols, period=period, interval="1d", auto_adjust=True, group_by="ticker",
+                                  threads=True, progress=False, timeout=config.UPSTREAM_TIMEOUT_S)
+            except Exception as exc:
+                raise _translate(exc, "batch") from exc
+            return split_batch(raw, symbols)
+
+        return with_retries(once)
+
     def search(self, query: str) -> list[dict]:
         def once() -> list[dict]:
             try:
@@ -104,4 +118,29 @@ def parse_news(raw: list) -> list[dict]:
             continue
         out.append({"headline": title[:300], "source": str(source)[:80], "url": url, "published_at": str(published)})
     out.sort(key=lambda x: x["published_at"], reverse=True)
+    return out
+
+
+def split_batch(raw: pd.DataFrame | None, symbols: list[str]) -> dict[str, pd.DataFrame]:
+    """Split a yfinance multi-ticker frame (columns: ticker -> field) into clean per-symbol frames.
+    Symbols with no usable data are omitted. Raises DataUnavailable if nothing is usable."""
+    if raw is None or raw.empty:
+        raise DataUnavailable("The market-data provider returned no data.", retryable=True)
+    out: dict[str, pd.DataFrame] = {}
+    cols = raw.columns
+    multi = isinstance(cols, pd.MultiIndex)
+    for sym in symbols:
+        try:
+            df = raw[sym] if multi else raw  # single-symbol downloads are not nested
+            if "Close" not in df:
+                continue
+            df = df.reindex(columns=COLUMNS).dropna(subset=["Close"])
+            if df.empty:
+                continue
+            df.index = pd.to_datetime(df.index).tz_localize(None).normalize()
+            out[sym] = df
+        except (KeyError, ValueError, TypeError):
+            continue
+    if not out:
+        raise DataUnavailable("The market-data provider returned no usable data.", retryable=True)
     return out

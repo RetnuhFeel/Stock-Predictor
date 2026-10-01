@@ -49,6 +49,9 @@ async function mockApi(context) {
       return json({ symbol: p.split("/").pop(), horizon_days: h, last_close: 124, headline_model: "ewma", forecast_daily_vol: 0.012, annualized_vol: 0.19, horizon_vol: 0.027,
         risk_range: { one_sigma_pct: 2.7, low: 120.7, high: 127.4, nominal_coverage: 0.68, backtest_coverage: 0.72 }, verdict: "inconclusive", skill_vs_naive: 0.01, skill_ci_90: [-0.04, 0.06],
         models: [vm("naive", "baseline", 0), vm("ewma", "inconclusive", 0.01)], n_test_points: 600, n_independent_tests: 120, small_sample: false, embargo_days: h, method: "wf", notes: ["Fat tails exist."], disclaimer: "Educational only.", ...fresh }); }
+    if (p === "/api/trending") { if (globalThis.__trendingFail) return json({ error: { code: "DATA_UNAVAILABLE", message: "x", retryable: true } }, 503);
+      return json({ days: 3, limit: 5, items: [["AAPL", "Apple Inc.", 6.1], ["NVDA", "NVIDIA Corporation", 5.2], ["AMD", "Advanced Micro Devices, Inc.", 4.4], ["META", "Meta Platforms, Inc.", 3.9], ["TSLA", "Tesla, Inc.", 3.1]]
+        .map(([symbol, name, r], i) => ({ rank: i + 1, symbol, name, return_percent: r, last_close: 120 + i, as_of: "2026-09-30" })), universe_size: 106, evaluated: 104, method: "close-to-close", note: "A plain momentum screen, not a recommendation or a prediction.", disclaimer: "Educational only.", ...fresh }); }
     if (p === "/api/prediction-log") return json(globalThis.__log ?? emptyLog);
     return json({ error: { code: "NOT_FOUND", message: "unmocked", retryable: false } }, 404);
   });
@@ -93,6 +96,62 @@ for (const scheme of ["light", "dark"]) {
   await page.getByRole("button", { name: "Compare", exact: true }).click();
   await page.getByRole("table").first().waitFor({ timeout: 15000 });
   await axe(page, `[${scheme}] compare`);
+  // lists: Trending is the default, read-only; user lists are create/rename/delete-able and persisted
+  await page.goto(WEB);
+  await page.getByRole("combobox", { name: "List", exact: true }).waitFor({ timeout: 30000 });
+  const sel = page.getByRole("combobox", { name: "List", exact: true });
+  ok((await sel.inputValue()) === "trending", `[${scheme}] Trending (3-day) is the default list`);
+  await page.getByRole("list", { name: /Trending \(3-day\), read-only/ }).waitFor();
+  ok((await page.getByRole("list", { name: /Trending/ }).locator("> li").count()) === 5, `[${scheme}] trending shows 5 tickers`);
+  ok(await page.getByText(/not a recommendation or a prediction/i).first().isVisible(), `[${scheme}] trending says it is not a recommendation`);
+  ok((await page.getByRole("button", { name: /Remove .* from this list/ }).count()) === 0, `[${scheme}] trending rows have no remove buttons`);
+  ok((await page.getByRole("button", { name: "Rename" }).count()) === 0, `[${scheme}] built-in list cannot be renamed`);
+  await axe(page, `[${scheme}] trending list`);
+  await page.getByRole("button", { name: "New list" }).click();
+  await page.getByLabel("Name of the new list").fill("Trending");
+  await page.getByRole("button", { name: "Create" }).click();
+  ok(await page.getByRole("alert").filter({ hasText: /reserved/ }).isVisible(), `[${scheme}] reserved name rejected inline`);
+  await page.getByLabel("Name of the new list").fill("Tech picks");
+  await page.getByRole("button", { name: "Create" }).click();
+  ok((await sel.inputValue()) !== "trending", `[${scheme}] new list is created and selected`);
+  await page.getByText(/This list is empty/).first().waitFor();
+  await sel.selectOption("trending");
+  await page.getByLabel("Add NVDA to one of your lists").selectOption({ label: "Tech picks" });
+  await page.getByText("Added NVDA to Tech picks.").first().waitFor({ state: "attached" });
+  await sel.selectOption({ label: "Tech picks (1)" });
+  ok((await page.getByRole("list", { name: /Tech picks tickers/ }).locator("> li").count()) === 1, `[${scheme}] ticker copied from Trending into the user list`);
+  await page.getByRole("button", { name: "Rename" }).click();
+  await page.getByLabel(/New name for/).fill("Chips");
+  await page.getByRole("button", { name: "Save" }).click();
+  await sel.selectOption({ label: "Chips (1)" });
+  await page.reload();
+  await page.getByRole("combobox", { name: "List", exact: true }).waitFor({ timeout: 30000 });
+  ok((await page.getByRole("combobox", { name: "List", exact: true }).locator("option:checked").innerText()).startsWith("Chips"), `[${scheme}] last-selected list persists across reload`);
+  await axe(page, `[${scheme}] user list`);
+  await page.getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("alertdialog").waitFor();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  ok((await page.getByRole("combobox", { name: "List", exact: true }).locator("option").count()) === 3, `[${scheme}] cancelling delete keeps the list`);
+  await page.getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("button", { name: "Yes, delete" }).click();
+  ok((await page.getByRole("combobox", { name: "List", exact: true }).locator("option").count()) === 2, `[${scheme}] list deleted after confirm`);
+  // legacy watchlist migration + corrupt data
+  await page.evaluate(() => { localStorage.removeItem("lists.v2"); localStorage.setItem("watchlist.v1", JSON.stringify(["AAPL", "TSLA"])); });
+  await page.reload();
+  await page.getByRole("combobox", { name: "List", exact: true }).selectOption({ label: "My watchlist (2)" });
+  ok(await page.getByRole("list", { name: /My watchlist tickers/ }).getByText("TSLA").isVisible(), `[${scheme}] legacy watchlist migrated to "My watchlist"`);
+  await page.evaluate(() => localStorage.setItem("lists.v2", "{not json"));
+  await page.reload();
+  await page.getByRole("combobox", { name: "List", exact: true }).waitFor({ timeout: 30000 });
+  ok(await page.getByRole("list", { name: /Trending/ }).isVisible(), `[${scheme}] corrupt saved lists fall back to Trending without crashing`);
+  // trending failure state
+  globalThis.__trendingFail = true;
+  await page.evaluate(() => Object.keys(localStorage).filter((k) => k.includes("trending")).forEach((k) => localStorage.removeItem(k)));
+  await page.reload();
+  await page.getByRole("combobox", { name: "List", exact: true }).waitFor({ timeout: 30000 });
+  await page.getByRole("button", { name: /retry|try again/i }).first().waitFor({ timeout: 20000 });
+  ok(true, `[${scheme}] trending error state offers retry`);
+  globalThis.__trendingFail = false;
   await page.goto(`${WEB}/model`);
   await page.getByRole("table").first().waitFor({ timeout: 15000 });
   ok((await page.getByRole("dialog").count()) === 0, `[${scheme}] /model is gate-exempt`);

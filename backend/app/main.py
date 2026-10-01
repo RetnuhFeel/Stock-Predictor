@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 
 from . import config
 from .cache import Fetched, TTLCache
-from .errors import ApiError, InvalidRange, InvalidRequest, NotFound, PayloadTooLarge, Unauthorized
+from .errors import ApiError, DataUnavailable, InvalidRange, InvalidRequest, NotFound, PayloadTooLarge, Unauthorized
 from .forecast import forecast
 from .freshness import describe, describe_fetch, today_ny
 from .models import compare_models
@@ -94,7 +94,7 @@ async def observe_and_limit(request: Request, call_next):
         retry = None
         if path.startswith("/api/") and config.RATE_LIMIT_PER_MIN > 0:
             retry = _limited("api", _client_id(request), config.RATE_LIMIT_PER_MIN, time.monotonic())
-        heavy = path.startswith(("/api/compare-models/", "/api/volatility/"))
+        heavy = path.startswith(("/api/compare-models/", "/api/volatility/", "/api/trending"))
         if retry is None and heavy and config.RATE_LIMIT_PER_MIN > 0:
             retry = _limited("heavy", _client_id(request), config.HEAVY_RATE_PER_MIN, time.monotonic())
         if retry is None and path == "/api/model-report" and config.RATE_LIMIT_PER_MIN > 0:
@@ -488,3 +488,53 @@ def prediction_log(limit: int = Query(25, ge=1, le=100), offset: int = Query(0, 
     got = cache.fetch(("plog", sym, status, limit, offset), config.PREDICTION_LOG_TTL_S, build)
     return {**got.value, **describe_fetch(got.fetched_at, False), "disclaimer": config.DISCLAIMER}
 
+
+
+# --- trending momentum screen --------------------------------------------------------------------------
+_trending_lock = threading.Lock()  # one universe download at a time, however many requests arrive together
+
+
+def _compute_trending(provider: BaseProvider, days: int) -> dict:
+    from .universe import NAMES, SYMBOLS
+    frames = provider.batch_history(SYMBOLS, "1mo")
+    rows = []
+    for sym, df in frames.items():
+        close = df["Close"].dropna()
+        if len(close) < days + 1 or float(close.iloc[-1 - days]) <= 0:
+            continue
+        rows.append({"symbol": sym, "name": NAMES.get(sym, ""), "last_close": float(close.iloc[-1]),
+                     "start_close": float(close.iloc[-1 - days]), "as_of": close.index[-1].date()})
+    if not rows:
+        raise DataUnavailable("No usable price data for the trending screen.", retryable=True)
+    as_of = max(r["as_of"] for r in rows)
+    rows = [r for r in rows if r["as_of"] == as_of]  # drop tickers whose latest bar is older (halted/lagging)
+    if len(rows) < config.TRENDING_MIN_COVERAGE * len(SYMBOLS):
+        raise DataUnavailable(f"Only {len(rows)} of {len(SYMBOLS)} tickers had current data.", retryable=True)
+    for r in rows:
+        r["return_percent"] = round((r["last_close"] / r["start_close"] - 1) * 100, 2)
+    rows.sort(key=lambda r: (-r["return_percent"], r["symbol"]))
+    return {"rows": rows, "as_of": as_of, "universe_size": len(SYMBOLS), "evaluated": len(rows)}
+
+
+@app.get("/api/trending")
+def trending(days: int = Query(3, ge=1, le=config.TRENDING_MAX_DAYS),
+             limit: int = Query(5, ge=1, le=config.TRENDING_MAX_LIMIT),
+             provider: BaseProvider = Depends(get_provider)):
+    """Top gainers by close-to-close return over the last ``days`` trading days within a fixed, curated
+    universe of liquid US large caps. A plain momentum screen: not a recommendation or a prediction."""
+    def build():
+        with _trending_lock:
+            return _compute_trending(provider, days)
+
+    got = cache.fetch(("trending", provider.name, days), config.TRENDING_TTL_S, build,
+                      stale_max_age=config.STALE_MAX_AGE_S)
+    v = got.value
+    items = [{"rank": i, "symbol": r["symbol"], "name": r["name"], "return_percent": r["return_percent"],
+              "last_close": round(r["last_close"], 4), "as_of": r["as_of"].isoformat()}
+             for i, r in enumerate(v["rows"][:limit], start=1)]
+    return {"days": days, "limit": limit, "items": items, "universe_size": v["universe_size"],
+            "evaluated": v["evaluated"], "method": f"Close-to-close return over the last {days} trading days, "
+            f"ranked within a fixed list of {v['universe_size']} liquid US large-cap stocks.",
+            "note": "A plain momentum screen, not a recommendation or a prediction. Past gains do not predict "
+                    "future returns, and stocks that jumped recently often give some of it back.",
+            **describe(v["as_of"], got.fetched_at, got.stale), "disclaimer": config.DISCLAIMER}

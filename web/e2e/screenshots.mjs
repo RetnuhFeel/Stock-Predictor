@@ -22,6 +22,29 @@ const forecastReady = async (page) => {
 };
 const shot = (page, name, opts = {}) => page.screenshot({ path: `${OUT}/${name}`, type: "png", ...opts });
 
+// Lists: Trending default + a user list (desktop) and mobile
+{
+  const c = await ctx({ colorScheme: "light", viewport: { width: 1280, height: 800 } });
+  const page = await c.newPage();
+  await page.goto(WEB); await accept(page); await forecastReady(page);
+  const sel = page.getByRole("combobox", { name: "List", exact: true });
+  await page.getByRole("list", { name: /Trending/ }).locator("> li").first().waitFor({ timeout: 120000 });
+  await page.waitForTimeout(500);
+  await shot(page, "lists-trending-light.png");
+  await sel.selectOption("default");
+  await page.waitForTimeout(800);
+  await shot(page, "lists-user-light.png");
+  await c.close();
+  const m = await ctx({ colorScheme: "light", viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+  const mp = await m.newPage();
+  await mp.goto(WEB); await accept(mp);
+  await mp.getByRole("list", { name: /Trending/ }).locator("> li").first().waitFor({ timeout: 120000 });
+  await mp.waitForTimeout(500);
+  await shot(mp, "mobile-lists.png");
+  await m.close();
+}
+if (process.env.ONLY === "lists") { await browser.close(); console.log("done (lists only)"); process.exit(0); }
+
 // Desktop light + dark
 for (const scheme of ["light", "dark"]) {
   const c = await ctx({ colorScheme: scheme, viewport: { width: 1280, height: 800 } });
