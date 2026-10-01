@@ -336,3 +336,106 @@ def test_query_failure_logged_with_phase_query(store, caplog, monkeypatch):
         store.page(5, 0)
     ctx = _records(caplog)[0].ctx
     assert ctx["op"] == "page" and ctx["phase"] == "query" and "connection reset" in ctx["message"]
+
+
+# ---------- column lengths (SQLite doesn't enforce VARCHAR(n); Postgres does) ----------
+def _limits():
+    from app.storage import predictions
+    return {c.name: c.type.length for c in predictions.columns if getattr(c.type, "length", None)}
+
+
+def _assert_fits(rows):
+    lim = _limits()
+    for r in rows:
+        for col, n in lim.items():
+            v = r.get(col)
+            if isinstance(v, str):
+                assert len(v) <= n, f"{col}={v!r} ({len(v)}) exceeds VARCHAR({n})"
+
+
+def test_column_lengths_are_safe():
+    lim = _limits()
+    assert lim["backtest_verdict"] >= 64 and lim["model"] >= 64 and lim["symbol"] >= 16
+    assert lim["entry_hash"] == lim["prev_hash"] == 64  # sha-256 hex, real length
+    assert lim["base_date"] == lim["realized_date"] == 10  # YYYY-MM-DD
+    assert lim["made_at"] >= 20 and lim["resolved_at"] >= 20  # YYYY-MM-DDTHH:MM:SSZ
+    assert lim["status"] >= len("resolved")
+
+
+def test_every_value_the_logger_writes_fits_its_column(client, task, store, fake):
+    """Regression: backtest_verdict 'not_better_or_inconclusive' (26 chars) overflowed VARCHAR(16) on Postgres."""
+    from app.trackrecord import record_from_forecast
+    # both verdict branches of the logger, via the real record builder
+    for beats in (True, False):
+        result = {"symbol": "X" * 15, "horizon_days": 5, "last_date": "2026-09-30", "last_close": 1.0,
+                  "predicted_return": 0.01, "interval_80": {"low": 0.9, "high": 1.1},
+                  "backtest": {"skill_vs_baseline": 0.0, "beats_baseline": beats}}
+        _assert_fits([record_from_forecast(result, None)])
+    # end to end: what the scheduled task actually stores, before and after resolution
+    client.post("/api/_tasks/run-prediction-log", headers=task)
+    rows = store.all_rows()
+    assert rows
+    _assert_fits(rows)
+    longest = max(len(r["backtest_verdict"]) for r in rows)
+    assert longest > 16  # the value that used to overflow is really exercised here
+    for r in store.pending():
+        store.resolve(r["id"], "2026-10-08", 101.0, 0.01)
+    _assert_fits(store.all_rows())
+    # symbol validator allows up to 15 chars: the longest legal symbol fits too
+    from app.symbols import normalize_symbol
+    assert len(normalize_symbol("A" * 15)) <= _limits()["symbol"]
+
+
+def test_plan_widening_only_widens_and_is_idempotent():
+    from app.storage import plan_widening
+    old = {"symbol": 16, "made_at": 24, "backtest_verdict": 16, "model": 32, "status": 12, "resolved_at": 24,
+           "base_date": 10, "realized_date": 10, "prev_hash": 64, "entry_hash": 64, "id": None, "base_close": None}
+    plan = dict(plan_widening(old))
+    assert plan["backtest_verdict"] == 64 and plan["model"] == 64 and plan["symbol"] == 32
+    assert "entry_hash" not in plan and "prev_hash" not in plan and "base_date" not in plan and "id" not in plan
+    widened = {**old, **plan}
+    assert plan_widening(widened) == []  # second run: nothing to do
+    assert plan_widening({**widened, "model": 200}) == []  # never narrows a wider column
+
+
+def test_postgres_migration_issues_alter_for_short_columns_only(monkeypatch):
+    from app import storage
+
+    class Conn:
+        def __init__(self):
+            self.sql = []
+
+        def execute(self, stmt):
+            self.sql.append(str(stmt))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class Eng:
+        conn = Conn()
+
+        def begin(self):
+            return self.conn
+
+    live = [{"name": "backtest_verdict", "type": type("T", (), {"length": 16})()},
+            {"name": "entry_hash", "type": type("T", (), {"length": 64})()},
+            {"name": "id", "type": type("T", (), {})()}]
+    monkeypatch.setattr(storage, "inspect", lambda conn: type("I", (), {"get_columns": lambda self, t: live})())
+    st = PredictionStore("sqlite://")
+    st.engine = Eng()
+    st._migrate_columns()
+    assert st.engine.conn.sql == ['ALTER TABLE predictions ALTER COLUMN "backtest_verdict" TYPE VARCHAR(64)']
+
+
+def test_migration_only_runs_for_postgres(store, monkeypatch):
+    called = []
+    monkeypatch.setattr(store, "_migrate_columns", lambda: called.append(1))
+    store.init()
+    assert called == [] and store._ready  # sqlite: unchanged behaviour
+    store.backend = "postgres"
+    store._ready = False
+    store.init()
+    assert called == [1]
