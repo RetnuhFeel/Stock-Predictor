@@ -29,7 +29,9 @@ from sqlalchemy import (
     create_engine,
     func,
     insert,
+    inspect,
     select,
+    text,
     update,
 )
 from sqlalchemy.engine import Engine, make_url
@@ -48,22 +50,22 @@ metadata = MetaData()
 predictions = Table(
     "predictions", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("symbol", String(16), nullable=False),
+    Column("symbol", String(32), nullable=False),
     Column("horizon_days", Integer, nullable=False),
-    Column("made_at", String(24), nullable=False),        # UTC ISO 8601, set by the server
+    Column("made_at", String(32), nullable=False),        # UTC ISO 8601, set by the server
     Column("base_date", String(10), nullable=False),      # date of the last bar the forecast used
     Column("base_close", Float, nullable=False),
     Column("predicted_return", Float, nullable=False),    # log return
     Column("interval_low", Float, nullable=False),        # 80% interval, price
     Column("interval_high", Float, nullable=False),
     Column("backtest_skill", Float),                      # backtest snapshot at the time (NOT a live result)
-    Column("backtest_verdict", String(16)),
-    Column("model", String(32), nullable=False),
+    Column("backtest_verdict", String(64)),
+    Column("model", String(64), nullable=False),
     Column("prev_hash", String(64), nullable=False),
     Column("entry_hash", String(64), nullable=False),
     # outcome (filled once, after the horizon has passed)
-    Column("status", String(12), nullable=False, default="pending"),  # pending | resolved
-    Column("resolved_at", String(24)),
+    Column("status", String(16), nullable=False, default="pending"),  # pending | resolved
+    Column("resolved_at", String(32)),
     Column("realized_date", String(10)),
     Column("realized_close", Float),
     Column("realized_return", Float),                     # log return, from the same adjusted series as base
@@ -73,6 +75,18 @@ predictions = Table(
 HASH_FIELDS = ("symbol", "horizon_days", "made_at", "base_date", "base_close", "predicted_return",
                "interval_low", "interval_high", "backtest_skill", "backtest_verdict", "model")
 GENESIS = "0" * 64
+
+
+def plan_widening(live: dict[str, int | None]) -> list[tuple[str, int]]:
+    """Columns whose live VARCHAR length is smaller than the model's. Never narrows (so it is idempotent and can't
+    truncate data); sha-256 hash columns are 64 in both and are never touched."""
+    plan = []
+    for col in predictions.columns:
+        want = getattr(col.type, "length", None)
+        have = live.get(col.name)
+        if want and have is not None and have < want:
+            plan.append((col.name, want))
+    return plan
 
 
 class StorageUnavailable(ApiError):
@@ -161,9 +175,21 @@ class PredictionStore:
                 _sleep(CONNECT_BACKOFF_S[min(n - 1, len(CONNECT_BACKOFF_S) - 1)])
         try:
             metadata.create_all(self.engine)
+            if self.backend == "postgres":
+                self._migrate_columns()
         except SQLAlchemyError as exc:
             raise self._fail("init", exc, phase="query") from None
         self._ready = True
+
+    def _migrate_columns(self) -> None:
+        """create_all never alters existing tables. An earlier release created some VARCHAR columns too short
+        (e.g. backtest_verdict VARCHAR(16)), so widen any that are smaller than the current model. Idempotent."""
+        with self.engine.begin() as conn:
+            live = {c["name"]: getattr(c["type"], "length", None) for c in inspect(conn).get_columns("predictions")}
+            for name, length in plan_widening(live):
+                # identifiers come from our own table definition, never from user input
+                conn.execute(text(f'ALTER TABLE predictions ALTER COLUMN "{name}" TYPE VARCHAR({int(length)})'))
+                log_event(log, "storage_column_widened", logging.INFO, column=name, length=length, host=self._host)
 
     def _ensure(self) -> None:
         if not self._ready:
