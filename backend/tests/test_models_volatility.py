@@ -70,7 +70,7 @@ def test_compare_models_endpoint(client, fake):
     calls = fake.calls
     client.get("/api/compare-models/AAPL?horizon=20")
     assert fake.calls == calls  # cached
-    for bad in ["horizon=0", "horizon=61", "horizon=abc"]:
+    for bad in ["horizon=0", "horizon=257", "horizon=abc"]:
         assert client.get(f"/api/compare-models/AAPL?{bad}").status_code in (400, 422)
     assert client.get("/api/compare-models/A$B").json()["error"]["code"] == "INVALID_SYMBOL"
     assert client.get("/api/compare-models/FAIL").json()["error"]["code"] == "DATA_UNAVAILABLE"
@@ -115,5 +115,5 @@ def test_volatility_endpoint(client):
     b = r.json()
     assert r.status_code == 200 and b["horizon_days"] == 20 and b["risk_range"]["one_sigma_pct"] > 0
     assert b["stale"] is False and b["disclaimer"]
-    assert client.get("/api/volatility/MSFT?horizon=99").status_code in (400, 422)
+    assert client.get("/api/volatility/MSFT?horizon=999").status_code in (400, 422)
     assert main.cache._data  # cached

@@ -7,12 +7,14 @@ import { useOnline } from "@/lib/online";
 import { ModelComparison } from "./ModelComparison";
 import { NewsPanel } from "./NewsPanel";
 import { ErrorNotice, OutdatedLabel } from "./Notices";
+import { PerformanceTimeline } from "./PerformanceTimeline";
 import { SpikePanel } from "./SpikePanel";
 import { VolatilityPanel } from "./VolatilityPanel";
 import type { Forecast, History } from "@/lib/types";
 
 const RANGES = ["1mo", "3mo", "6mo", "1y", "2y"] as const;
-const HORIZONS = [1, 5, 10, 20, 40, 60]; // trading days; the backend validates 1..60
+const HORIZONS = [5, 10, 20, 60, 120, 180, 256]; // trading days; the backend validates 1..256
+const LONG_HORIZON = 60;
 function ForecastNote() {
   return (
     <p role="note" className="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
@@ -102,13 +104,21 @@ export function StockPanel({ symbol }: { symbol: string }) {
         </>
       )}
 
+      <PerformanceTimeline symbol={symbol} />
+
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <span id="horizon-label">Forecast horizon (trading days):</span>
         <div className="flex flex-wrap gap-1" role="group" aria-labelledby="horizon-label">
           {HORIZONS.map((h) => (<button key={h} className={btn(h === horizon)} aria-pressed={h === horizon} onClick={() => setHorizon(h)}>{h}d</button>))}
         </div>
-        {horizon >= 20 && <span className="text-xs text-slate-600 dark:text-slate-300">Longer horizons mean wider ranges and fewer independent backtests.</span>}
+        {horizon >= 20 && horizon < LONG_HORIZON && <span className="text-xs text-slate-600 dark:text-slate-300">Longer horizons mean wider ranges and fewer independent backtests.</span>}
       </div>
+      {horizon >= LONG_HORIZON && (
+        <p role="note" className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-950 dark:border-red-800 dark:bg-red-950/40 dark:text-red-100">
+          <strong>Long-horizon forecasts ({horizon} trading days, about {Math.round(horizon / 21)} months) are highly uncertain.</strong> The range is very wide, only a handful
+          of independent past periods exist in five years of data to test it, and the point estimate is mostly noise. Use it as a sense of scale, not a prediction.
+        </p>
+      )}
 
       {fc.loading && !fc.data && <p role="status" className="text-sm text-slate-700 dark:text-slate-300">Training model &amp; running backtest… (can take a few seconds)</p>}
       {fc.failure && !(fc.data && !online) && <ErrorNotice failure={fc.failure} onRetry={fc.retry} what="Forecast" />}

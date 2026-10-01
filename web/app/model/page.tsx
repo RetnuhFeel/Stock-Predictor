@@ -29,6 +29,12 @@ export default function Model() {
         <li><strong>Baseline:</strong> every result is compared with &ldquo;the price stays where it is&rdquo;. If the model can&apos;t beat that, it has no skill.</li>
         <li><strong>Uncertainty:</strong> overlapping windows make tests correlated, so a block bootstrap gives a 90% range for the skill score, and we only say &ldquo;better&rdquo; when that whole range is above zero.</li>
       </ul>
+      <h2>Long horizons (up to 256 trading days)</h2>
+      <p>
+        Horizons from 5 to 256 trading days are available. The same walk-forward test and embargo (at least <em>N</em> days) apply, but five years of
+        data hold only about 9 independent 60-day periods and about 1 independent 256-day period. With fewer than 5 independent periods a model can
+        never be called &ldquo;better&rdquo;, and every forecast of 60 days or more is labelled highly uncertain. Treat these as a sense of scale, not a prediction.
+      </p>
       <h2>Limits</h2>
       <ul>
         <li>Short-horizon returns are close to random. Expect &ldquo;not better&rdquo; or &ldquo;inconclusive&rdquo; most of the time, and a few &ldquo;better&rdquo; results are expected by chance alone.</li>

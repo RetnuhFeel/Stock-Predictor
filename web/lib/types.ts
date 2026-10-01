@@ -38,6 +38,7 @@ export type Backtest = {
   /** 1 - model RMSE / naive RMSE: positive = model error is lower than guessing "price stays flat" */
   skill_vs_baseline: number;
   beats_baseline: boolean;
+  too_few_independent?: boolean;
   note: string;
 };
 
@@ -246,5 +247,20 @@ export type Spikes = Freshness & {
   clamping: { method: string; fraction_of_path_days_clamped: number; fraction_of_paths_touching_band: number; terminal_at_high: number; terminal_at_low: number };
   backtest: SpikeBacktest;
   notes: string[];
+  disclaimer: string;
+};
+
+export type TimelineRange = "1mo" | "6mo" | "1y" | "5y";
+export type Timeline = Freshness & {
+  symbol: string;
+  range: TimelineRange;
+  points: { date: string; close: number }[];
+  n_points_total: number;
+  downsampled: boolean;
+  summary: {
+    start_date: string; end_date: string; start_close: number; end_close: number; period_return_pct: number;
+    high: number; high_date: string; low: number; low_date: string; max_drawdown_pct: number;
+  };
+  note: string;
   disclaimer: string;
 };

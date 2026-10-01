@@ -136,7 +136,7 @@ def test_endpoint_shape_freshness_cache_and_errors(client, fake):
     calls = fake.calls
     client.get("/api/spikes/AAPL?horizon=5")
     assert fake.calls == calls  # cached
-    for bad in ["horizon=0", "horizon=61", "horizon=abc"]:
+    for bad in ["horizon=0", "horizon=257", "horizon=abc"]:
         assert client.get(f"/api/spikes/AAPL?{bad}").status_code in (400, 422)
     assert client.get("/api/spikes/A$B").json()["error"]["code"] == "INVALID_SYMBOL"
     assert client.get("/api/spikes/FAIL").json()["error"]["code"] == "DATA_UNAVAILABLE"

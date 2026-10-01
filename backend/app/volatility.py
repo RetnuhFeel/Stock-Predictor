@@ -15,7 +15,14 @@ import numpy as np
 import pandas as pd
 
 from .errors import InsufficientData
-from .forecast import MIN_INDEPENDENT_TESTS, MIN_ROWS, fold_schedule, skill_ci_sq
+from .forecast import (
+    MIN_INDEP_FOR_VERDICT,
+    MIN_INDEPENDENT_TESTS,
+    MIN_ROWS,
+    fold_schedule,
+    not_enough_history,
+    skill_ci_sq,
+)
 
 LAMBDA = 0.94
 HEADLINE = "ewma"  # fixed in advance: not chosen by looking at backtest results
@@ -61,10 +68,10 @@ def forecast_volatility(close: pd.Series, horizon: int, n_folds: int = 6) -> dic
     feats, label = _dataset(close, horizon)
     data = feats.join(label).dropna()
     if len(data) < 150:
-        raise InsufficientData("Not enough usable rows after feature construction")
+        raise InsufficientData(not_enough_history(horizon, len(close)))
     folds = fold_schedule(len(data), horizon, n_folds)
     if not folds:
-        raise InsufficientData("Not enough history for walk-forward validation")
+        raise InsufficientData(not_enough_history(horizon, len(data)))
 
     actual = np.concatenate([data["fut"].iloc[t].to_numpy() for _, t in folds])
     ret_h = np.concatenate([data["ret_h"].iloc[t].to_numpy() for _, t in folds])
@@ -90,9 +97,10 @@ def forecast_volatility(close: pd.Series, horizon: int, n_folds: int = 6) -> dic
         is_naive = name == "naive"
         skill = 0.0 if is_naive else 1 - float(np.sqrt(sq.mean() / base_sq.mean()))
         ci = (0.0, 0.0) if is_naive else skill_ci_sq(sq, base_sq, horizon)
-        beats = bool((not is_naive) and skill > 0.02 and ci[0] > 0)
+        too_few = n_indep < MIN_INDEP_FOR_VERDICT
+        beats = bool((not is_naive) and skill > 0.02 and ci[0] > 0 and not too_few)
         verdict = ("baseline" if is_naive else "better" if beats
-                   else "inconclusive" if skill > 0 and ci[0] <= 0 else "not_better")
+                   else "inconclusive" if skill > 0 and (ci[0] <= 0 or too_few) else "not_better")
         label_, desc = LABELS[name]
         rows.append({"model": name, "label": label_, "description": desc,
                      "typical_error_pct": float(np.mean(np.abs(p / actual - 1)) * 100),

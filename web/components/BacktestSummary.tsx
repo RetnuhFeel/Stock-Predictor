@@ -14,11 +14,13 @@ function verdict(b: Backtest): Verdict {
       text: "In past tests the model did better than guessing, and the gap was bigger than random noise would usually produce. That is no promise it will keep doing so.",
     };
   }
-  if (b.skill_vs_baseline > 0 && ci && ci[0] <= 0) {
+  if (b.skill_vs_baseline > 0 && ((ci && ci[0] <= 0) || b.too_few_independent)) {
     return {
       icon: "≈", label: "Inconclusive",
       tone: "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200",
-      text: "The model's error was a little lower, but the difference is small enough to be luck. Don't read it as a real edge.",
+      text: b.too_few_independent
+        ? "The model's error was lower in the tests, but there are too few independent test periods at this horizon to tell that apart from luck. Don't read it as a real edge."
+        : "The model's error was a little lower, but the difference is small enough to be luck. Don't read it as a real edge.",
     };
   }
   return {

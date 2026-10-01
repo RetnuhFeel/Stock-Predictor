@@ -43,6 +43,38 @@ const shot = (page, name, opts = {}) => page.screenshot({ path: `${OUT}/${name}`
   await shot(mp, "mobile-lists.png");
   await m.close();
 }
+// Performance timeline (5Y) + 256-day long-horizon warning
+{
+  const c = await ctx({ colorScheme: "light", viewport: { width: 1280, height: 900 } });
+  const page = await c.newPage();
+  await page.goto(WEB); await accept(page); await forecastReady(page);
+  await page.getByRole("combobox", { name: "List", exact: true }).selectOption("default");
+  await page.getByRole("heading", { name: /Performance timeline/ }).waitFor({ timeout: 120000 });
+  await page.getByText("Period return").waitFor({ timeout: 120000 });
+  await page.waitForTimeout(800);
+  const tl = page.locator("section[aria-labelledby=timeline-title]");
+  await tl.scrollIntoViewIfNeeded(); await page.waitForTimeout(400);
+  await tl.screenshot({ path: `${OUT}/timeline-5y-light.png` });
+  await page.getByRole("button", { name: "256d", exact: true }).click();
+  await page.getByText(/Long-horizon forecasts \(256 trading days/).waitFor({ timeout: 120000 });
+  await page.getByText(/Experimental 256-day estimate/).waitFor({ timeout: 120000 });
+  const note = page.getByRole("note").filter({ hasText: "Long-horizon forecasts" });
+  await note.scrollIntoViewIfNeeded(); await page.waitForTimeout(400);
+  await page.screenshot({ path: `${OUT}/horizon-256-light.png` });
+  await c.close();
+  const m = await ctx({ colorScheme: "dark", viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1.5 });
+  const mp = await m.newPage();
+  await mp.goto(WEB); await accept(mp);
+  await mp.getByRole("combobox", { name: "List", exact: true }).selectOption("default");
+  await mp.getByText("Period return").waitFor({ timeout: 120000 });
+  await mp.waitForTimeout(800);
+  const mt = mp.locator("section[aria-labelledby=timeline-title]");
+  await mt.scrollIntoViewIfNeeded(); await mp.waitForTimeout(400);
+  await mt.screenshot({ path: `${OUT}/mobile-timeline-dark.png` });
+  await m.close();
+}
+if (process.env.ONLY === "timeline") { await browser.close(); console.log("done (timeline only)"); process.exit(0); }
+
 // Experimental spike scenario (desktop + mobile), real backend. Toggle is off by default.
 {
   const c = await ctx({ colorScheme: "light", viewport: { width: 1280, height: 900 } });
