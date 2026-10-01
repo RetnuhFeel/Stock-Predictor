@@ -18,7 +18,16 @@ from fastapi.responses import JSONResponse
 
 from . import config
 from .cache import Fetched, TTLCache
-from .errors import ApiError, DataUnavailable, InvalidRange, InvalidRequest, NotFound, PayloadTooLarge, Unauthorized
+from .errors import (
+    ApiError,
+    DataUnavailable,
+    InsufficientData,
+    InvalidRange,
+    InvalidRequest,
+    NotFound,
+    PayloadTooLarge,
+    Unauthorized,
+)
 from .forecast import forecast
 from .freshness import describe, describe_fetch, today_ny
 from .models import compare_models
@@ -34,6 +43,7 @@ from .observability import (
     setup_logging,
 )
 from .providers import BaseProvider, create_provider
+from .spikes import spike_forecast
 from .storage import PredictionStore, now_iso
 from .symbols import normalize_symbol
 from .trackrecord import public_row, record_from_forecast, resolve_pending, scorecard
@@ -94,7 +104,7 @@ async def observe_and_limit(request: Request, call_next):
         retry = None
         if path.startswith("/api/") and config.RATE_LIMIT_PER_MIN > 0:
             retry = _limited("api", _client_id(request), config.RATE_LIMIT_PER_MIN, time.monotonic())
-        heavy = path.startswith(("/api/compare-models/", "/api/volatility/", "/api/trending"))
+        heavy = path.startswith(("/api/compare-models/", "/api/volatility/", "/api/spikes/", "/api/trending"))
         if retry is None and heavy and config.RATE_LIMIT_PER_MIN > 0:
             retry = _limited("heavy", _client_id(request), config.HEAVY_RATE_PER_MIN, time.monotonic())
         if retry is None and path == "/api/model-report" and config.RATE_LIMIT_PER_MIN > 0:
@@ -303,6 +313,52 @@ def history(symbol: str, range: str = Query("6mo"), provider: BaseProvider = Dep
     return {"symbol": sym, "range": range, "points": pts, **_freshness(df, got)}
 
 
+def _downsample(close: pd.Series, max_points: int) -> pd.Series:
+    """Keep at most ~max_points closes: the last close of each equal-sized bucket, plus the first point, the period high
+    and the period low (so the chart never hides the extremes quoted in the summary)."""
+    n = len(close)
+    if n <= max_points:
+        return close
+    keep = {0, n - 1, int(np.argmax(close.to_numpy())), int(np.argmin(close.to_numpy()))}
+    edges = np.linspace(0, n, max_points - 3, dtype=int)
+    keep.update(int(e) - 1 for e in edges[1:] if e > 0)
+    return close.iloc[sorted(keep)]
+
+
+@app.get("/api/timeline/{symbol}")
+def timeline(symbol: str, range: str = Query("5y"), provider: BaseProvider = Depends(get_provider)):
+    """Closing-price timeline over 1mo/6mo/1y/5y with period return, high and low (computed on the full data)."""
+    sym = normalize_symbol(symbol)
+    if range not in config.TIMELINE_RANGES:
+        raise InvalidRange(f"range must be one of {list(config.TIMELINE_RANGES)}")
+    got = _history(provider, sym, "5y")  # one cached download serves every window
+    df = got.value
+    close = df["Close"].dropna()
+    close = close[close > 0]
+    start = close.index[-1] - pd.DateOffset(months=config.TIMELINE_RANGES[range])
+    window = close[close.index >= start]
+    if len(window) < 2:
+        raise InsufficientData("Not enough price history to draw a timeline.")
+    first, last = float(window.iloc[0]), float(window.iloc[-1])
+    hi_i, lo_i = int(np.argmax(window.to_numpy())), int(np.argmin(window.to_numpy()))
+    pts = _downsample(window, config.TIMELINE_MAX_POINTS)
+    return {
+        "symbol": sym, "range": range,
+        "points": [{"date": d.strftime("%Y-%m-%d"), "close": round(float(v), 4)} for d, v in pts.items()],
+        "n_points_total": int(len(window)), "downsampled": bool(len(pts) < len(window)),
+        "summary": {"start_date": window.index[0].strftime("%Y-%m-%d"),
+                    "end_date": window.index[-1].strftime("%Y-%m-%d"),
+                    "start_close": round(first, 4), "end_close": round(last, 4),
+                    "period_return_pct": round((last / first - 1) * 100, 2),
+                    "high": round(float(window.iloc[hi_i]), 4), "high_date": window.index[hi_i].strftime("%Y-%m-%d"),
+                    "low": round(float(window.iloc[lo_i]), 4), "low_date": window.index[lo_i].strftime("%Y-%m-%d"),
+                    "max_drawdown_pct": round(float((window / window.cummax() - 1).min() * 100), 2)},
+        "note": "Adjusted closing prices (splits and dividends included). "
+                "Past performance does not predict future results.",
+        **_freshness(df, got), "disclaimer": config.DISCLAIMER,
+    }
+
+
 def _forecast_for(provider: BaseProvider, sym: str, horizon: int) -> tuple[dict, pd.DataFrame, Fetched]:
     hist = _history(provider, sym, "5y")  # served from (stale) cache if the provider is failing
     df = hist.value
@@ -328,7 +384,7 @@ def _verdict(bt: dict) -> str:
     if bt["beats_baseline"]:
         return "better"
     ci = bt.get("skill_ci_90")
-    if bt["skill_vs_baseline"] > 0 and ci and ci[0] <= 0:
+    if bt["skill_vs_baseline"] > 0 and ((ci and ci[0] <= 0) or bt.get("too_few_independent")):
         return "inconclusive"
     return "not_better"
 
@@ -410,6 +466,27 @@ def volatility_endpoint(symbol: str, horizon: int = Query(5, ge=1, le=config.MAX
     key = ("vol", provider.name, sym, horizon, df.index[-1].date())
     result = cache.fetch(key, config.MODELS_TTL_S,
                          lambda: {"symbol": sym, **forecast_volatility(df["Close"], horizon)}).value
+    return {**result, **_freshness(df, hist), "disclaimer": config.DISCLAIMER}
+
+
+@app.get("/api/spikes/{symbol}")
+def spikes_endpoint(symbol: str, horizon: int = Query(5, ge=1, le=config.MAX_HORIZON),
+                    provider: BaseProvider = Depends(get_provider)):
+    """EXPERIMENTAL: simulated up/down spikes (jump-diffusion Monte Carlo) clamped inside the standard forecast band.
+
+    Separate from /api/forecast and never used by the prediction log. Includes a walk-forward backtest of the
+    spike range against the standard interval, reported whichever way it falls.
+    """
+    sym = normalize_symbol(symbol)
+    hist = _history(provider, sym, "5y")
+    df = hist.value
+
+    def build():
+        base, _, _ = _forecast_for(provider, sym, horizon)
+        return {"symbol": sym, **spike_forecast(df["Close"], horizon, base)}
+
+    key = ("spikes", provider.name, sym, horizon, df.index[-1].date())
+    result = cache.fetch(key, config.MODELS_TTL_S, build).value
     return {**result, **_freshness(df, hist), "disclaimer": config.DISCLAIMER}
 
 

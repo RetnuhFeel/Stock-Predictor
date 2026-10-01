@@ -52,6 +52,21 @@ async function mockApi(context) {
     if (p === "/api/trending") { if (globalThis.__trendingFail) return json({ error: { code: "DATA_UNAVAILABLE", message: "x", retryable: true } }, 503);
       return json({ days: 3, limit: 5, items: [["AAPL", "Apple Inc.", 6.1], ["NVDA", "NVIDIA Corporation", 5.2], ["AMD", "Advanced Micro Devices, Inc.", 4.4], ["META", "Meta Platforms, Inc.", 3.9], ["TSLA", "Tesla, Inc.", 3.1]]
         .map(([symbol, name, r], i) => ({ rank: i + 1, symbol, name, return_percent: r, last_close: 120 + i, as_of: "2026-09-30" })), universe_size: 106, evaluated: 104, method: "close-to-close", note: "A plain momentum screen, not a recommendation or a prediction.", disclaimer: "Educational only.", ...fresh }); }
+    if (p.startsWith("/api/timeline/")) { if (globalThis.__timelineFail) return json({ error: { code: "DATA_UNAVAILABLE", message: "x", retryable: true } }, 503);
+      const rg = u.searchParams.get("range") || "5y"; const n = { "1mo": 21, "6mo": 126, "1y": 252, "5y": 400 }[rg]; const pts = Array.from({ length: Math.min(n, 120) }, (_, i) => ({ date: `2026-${String(1 + Math.floor(i / 28)).padStart(2, "0")}-${String(1 + (i % 28)).padStart(2, "0")}`, close: 100 + i * 0.5 + Math.sin(i / 4) * 4 }));
+      return json({ symbol: p.split("/").pop(), range: rg, points: pts, n_points_total: n, downsampled: n > 120, summary: { start_date: pts[0].date, end_date: pts.at(-1).date, start_close: pts[0].close, end_close: pts.at(-1).close, period_return_pct: 59.5, high: 163.9, high_date: "2026-05-02", low: 96.2, low_date: "2026-01-03", max_drawdown_pct: -12.3 },
+        note: "Adjusted closing prices. Past performance does not predict future results.", disclaimer: "Educational only.", ...fresh }); }
+    if (p.startsWith("/api/spikes/")) { globalThis.__spikeCalls = (globalThis.__spikeCalls ?? 0) + 1; if (globalThis.__spikeFail) return json({ error: { code: "INSUFFICIENT_DATA", message: "Need at least 250 daily bars, got 100", retryable: false } }, 422);
+      const h = Number(u.searchParams.get("horizon") || 5); const rg = (cov, gain, v) => ({ coverage: cov, mean_width: 0.08, interval_score: 0.11, ...(gain === undefined ? {} : { score_gain_vs_baseline: gain, score_gain_ci_90: [gain - 0.05, gain + 0.05], verdict: v }) });
+      return json({ experimental: true, symbol: p.split("/").pop(), horizon_days: h, last_close: 124, last_date: "2026-09-30", baseline_interval: { low: 118, high: 131 },
+        model: { name: "jump-diffusion Monte Carlo (experimental)", n_paths: 2000, seed: 42, bounds: "clamped: each day's simulated price is clipped to the standard forecast's normal band", jump_threshold_sigma: 2.5, calibration_days: 504 },
+        calibration: { robust_sigma_daily: 0.012, diffusion_sigma_daily: 0.011, jump_threshold_pct: 3.1, n_jumps_up: 9, n_jumps_down: 12, jump_freq_up_per_day: 0.018, jump_freq_down_per_day: 0.024, mean_jump_up_pct: 4, mean_jump_down_pct: -4.2, few_jumps: false },
+        path: fcPath.slice(0, Math.min(h, 5)).map((q, i) => ({ date: q.date, baseline_mid: q.mid, band_low: q.low, band_high: q.high, median: q.mid, mean: q.mid, sim_low: q.low + 1, sim_high: q.high - 1, spike_up: q.high - 1, spike_down: q.low + 1, p_jump_up: 0.04 * (i + 1), p_jump_down: 0.05 * (i + 1), p_touch_high: 0.03, p_touch_low: 0.04 })),
+        sample_paths: [fcPath.slice(0, Math.min(h, 5)).map((q) => q.mid)],
+        clamping: { method: "clip", fraction_of_path_days_clamped: 0.18, fraction_of_paths_touching_band: 0.35, terminal_at_high: 0.07, terminal_at_low: 0.05 },
+        backtest: { available: true, n_origins: 100, horizon_days: h, small_sample: false, nominal_coverage: 0.8, embargo_days: h, method: "wf", baseline: rg(0.8), jump_unclamped: rg(0.9, -0.05, "worse"), spike_clamped: rg(0.78, 0.01, "inconclusive"),
+          point: { baseline_rmse: 0.04, spike_median_rmse: 0.04, naive_rmse: 0.039, skill_vs_baseline: 0, skill_ci_90: [-0.01, 0.01], verdict: "inconclusive" }, mean_clamped_fraction_at_horizon: 0.2, summary: "Over 100 past forecast dates the standard 80% band contained the outcome 80% of the time." },
+        notes: ["Spikes are simulated from this stock's own past jump frequency and size. They are not predictions."], disclaimer: "Educational only.", ...fresh }); }
     if (p === "/api/prediction-log") return json(globalThis.__log ?? emptyLog);
     return json({ error: { code: "NOT_FOUND", message: "unmocked", retryable: false } }, 404);
   });
@@ -93,6 +108,50 @@ for (const scheme of ["light", "dark"]) {
   await page.getByText(/No model clearly beat/).first().waitFor();
   await page.waitForLoadState("networkidle");
   await axe(page, `[${scheme}] stock view with volatility + model comparison`);
+  // 5-year performance timeline: default 5Y, summary, range switch, normalized view, table, error state
+  await page.getByRole("heading", { name: /Performance timeline/ }).waitFor({ timeout: 15000 });
+  ok((await page.getByRole("button", { name: "5 years", exact: true }).getAttribute("aria-pressed")) === "true", `[${scheme}] timeline defaults to 5Y`);
+  ok(await page.getByText("Period return").isVisible() && await page.getByText("Worst drop from a peak").isVisible(), `[${scheme}] timeline shows return/high/low/drawdown summary`);
+  ok(await page.getByText(/The chart shows 120 of 400 trading days/).isVisible(), `[${scheme}] downsampling is disclosed`);
+  await page.getByRole("button", { name: "1 month", exact: true }).click();
+  await page.getByRole("heading", { name: /past 1 month/ }).waitFor({ timeout: 15000 });
+  ok((await page.getByRole("button", { name: "1 month", exact: true }).getAttribute("aria-pressed")) === "true", `[${scheme}] timeline range switch (1M)`);
+  await page.getByRole("button", { name: "5 years", exact: true }).click();
+  await page.getByLabel("Show as % change from the start of the period").check();
+  await page.locator("section[aria-labelledby=timeline-title]").getByText("View timeline data as a table").click();
+  ok((await page.locator("section[aria-labelledby=timeline-title] table tbody tr").count()) === 120, `[${scheme}] timeline table alternative`);
+  await page.waitForLoadState("networkidle");
+  await axe(page, `[${scheme}] performance timeline`);
+  // long-horizon warning and 256d option
+  for (const h of ["5d", "10d", "20d", "60d", "120d", "180d", "256d"]) ok((await page.getByRole("button", { name: h, exact: true }).count()) === 1, `[${scheme}] horizon option ${h}`);
+  await page.getByRole("button", { name: "256d", exact: true }).click();
+  await page.getByText(/Long-horizon forecasts \(256 trading days/).waitFor({ timeout: 15000 });
+  ok(await page.getByText(/highly uncertain/).first().isVisible(), `[${scheme}] long-horizon uncertainty note shown at 256d`);
+  await page.getByRole("button", { name: "10d", exact: true }).click();
+  ok((await page.getByText(/Long-horizon forecasts/).count()) === 0, `[${scheme}] long-horizon note hidden for short horizons`);
+  await page.getByText("(10-trading-day forecasts)").waitFor({ timeout: 15000 });
+  globalThis.__timelineFail = true;
+  await page.evaluate(() => Object.keys(localStorage).filter((k) => k.includes("timeline")).forEach((k) => localStorage.removeItem(k)));
+  await page.getByRole("button", { name: "1 year", exact: true }).click();
+  await page.locator("section[aria-labelledby=timeline-title]").getByRole("button", { name: /retry|try again/i }).first().waitFor({ timeout: 20000 });
+  ok(true, `[${scheme}] timeline error state offers retry`);
+  globalThis.__timelineFail = false;
+  // experimental spike scenario: off by default (nothing fetched), toggle on, badge + simulated-not-predicted text, table, error state
+  ok(await page.getByText("Experimental", { exact: true }).first().isVisible(), `[${scheme}] spike panel carries an Experimental badge`);
+  ok(!(await page.getByRole("checkbox", { name: "Show spike scenario" }).isChecked()) && !globalThis.__spikeCalls, `[${scheme}] spike scenario is off by default and not fetched`);
+  ok(await page.getByText(/simulated, not predicted/i).first().isVisible(), `[${scheme}] says spikes are simulated, not predicted`);
+  await page.getByRole("checkbox", { name: "Show spike scenario" }).check();
+  await page.getByText(/Did it help in past tests/).waitFor({ timeout: 15000 });
+  ok(await page.getByText(/clamped/i).first().isVisible(), `[${scheme}] spike panel states values are clamped to the normal range`);
+  await page.getByText("Spike bands as a table").click();
+  ok((await page.locator("section[aria-labelledby=spike-title] table tbody tr").count()) === 5, `[${scheme}] spike bands table rows`);
+  await page.waitForLoadState("networkidle");
+  await axe(page, `[${scheme}] spike scenario on`);
+  globalThis.__spikeFail = true;
+  await page.getByRole("button", { name: "20d", exact: true }).click();
+  await page.getByRole("button", { name: /retry|try again/i }).last().waitFor({ timeout: 20000 });
+  ok(true, `[${scheme}] spike scenario error state offers retry`);
+  globalThis.__spikeFail = false; globalThis.__spikeCalls = 0;
   await page.getByRole("button", { name: "Compare", exact: true }).click();
   await page.getByRole("table").first().waitFor({ timeout: 15000 });
   await axe(page, `[${scheme}] compare`);

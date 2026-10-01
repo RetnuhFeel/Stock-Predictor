@@ -38,6 +38,7 @@ export type Backtest = {
   /** 1 - model RMSE / naive RMSE: positive = model error is lower than guessing "price stays flat" */
   skill_vs_baseline: number;
   beats_baseline: boolean;
+  too_few_independent?: boolean;
   note: string;
 };
 
@@ -215,6 +216,51 @@ export type Trending = Freshness & {
   universe_size: number;
   evaluated: number;
   method: string;
+  note: string;
+  disclaimer: string;
+};
+
+export type SpikeVerdict = "better" | "worse" | "inconclusive";
+export type SpikeRange = { coverage: number; mean_width: number; interval_score: number; score_gain_vs_baseline?: number; score_gain_ci_90?: [number, number]; verdict?: SpikeVerdict };
+export type SpikeDay = {
+  date: string; baseline_mid: number; band_low: number; band_high: number; median: number; mean: number; sim_low: number; sim_high: number;
+  spike_up: number; spike_down: number; p_jump_up: number; p_jump_down: number; p_touch_high: number; p_touch_low: number;
+};
+export type SpikeBacktest =
+  | { available: false; reason: string }
+  | {
+      available: true; n_origins: number; horizon_days: number; small_sample: boolean; nominal_coverage: number; embargo_days: number; method: string;
+      baseline: SpikeRange; jump_unclamped: SpikeRange; spike_clamped: SpikeRange;
+      point: { baseline_rmse: number; spike_median_rmse: number; naive_rmse: number; skill_vs_baseline: number; skill_ci_90: [number, number]; verdict: SpikeVerdict };
+      mean_clamped_fraction_at_horizon: number; summary: string;
+    };
+export type Spikes = Freshness & {
+  experimental: true; symbol: string; horizon_days: number; last_close: number; last_date: string;
+  baseline_interval: { low: number; high: number };
+  model: { name: string; n_paths: number; seed: number; bounds: string; jump_threshold_sigma: number; calibration_days: number };
+  calibration: {
+    robust_sigma_daily: number; diffusion_sigma_daily: number; jump_threshold_pct: number; n_jumps_up: number; n_jumps_down: number;
+    jump_freq_up_per_day: number; jump_freq_down_per_day: number; mean_jump_up_pct: number | null; mean_jump_down_pct: number | null; few_jumps: boolean;
+  };
+  path: SpikeDay[];
+  sample_paths: number[][];
+  clamping: { method: string; fraction_of_path_days_clamped: number; fraction_of_paths_touching_band: number; terminal_at_high: number; terminal_at_low: number };
+  backtest: SpikeBacktest;
+  notes: string[];
+  disclaimer: string;
+};
+
+export type TimelineRange = "1mo" | "6mo" | "1y" | "5y";
+export type Timeline = Freshness & {
+  symbol: string;
+  range: TimelineRange;
+  points: { date: string; close: number }[];
+  n_points_total: number;
+  downsampled: boolean;
+  summary: {
+    start_date: string; end_date: string; start_close: number; end_close: number; period_return_pct: number;
+    high: number; high_date: string; low: number; low_date: string; max_drawdown_pct: number;
+  };
   note: string;
   disclaimer: string;
 };

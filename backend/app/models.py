@@ -17,6 +17,7 @@ from sklearn.preprocessing import StandardScaler
 from .errors import InsufficientData
 from .forecast import (
     FEATURES,
+    MIN_INDEP_FOR_VERDICT,
     MIN_INDEPENDENT_TESTS,
     MIN_ROWS,
     SEED,
@@ -24,6 +25,7 @@ from .forecast import (
     _model,
     fold_schedule,
     make_features,
+    not_enough_history,
     skill_ci_sq,
 )
 
@@ -105,7 +107,7 @@ def build_context(close: pd.Series, horizon: int) -> Context:
     ewm = logp.diff().ewm(halflife=EWMA_HALFLIFE, adjust=False).mean().rename("ewm")
     data = feats.assign(target=logp.shift(-horizon) - logp, ewm=ewm).dropna()
     if len(data) < 150:
-        raise InsufficientData("Not enough usable rows after feature construction")
+        raise InsufficientData(not_enough_history(horizon, len(close)))
     return Context(data[FEATURES], data["target"], data["ewm"], horizon)
 
 
@@ -114,7 +116,7 @@ def compare_models(close: pd.Series, horizon: int, n_folds: int = 6) -> dict:
     ctx = build_context(close, horizon)
     folds = fold_schedule(len(ctx.X), horizon, n_folds)
     if not folds:
-        raise InsufficientData("Not enough history for walk-forward validation")
+        raise InsufficientData(not_enough_history(horizon, len(ctx.X)))
     y_true = np.concatenate([ctx.y.iloc[test].to_numpy() for _, test in folds])
     base_sq = y_true**2
     n_test = int(len(y_true))
@@ -128,12 +130,13 @@ def compare_models(close: pd.Series, horizon: int, n_folds: int = 6) -> dict:
         is_naive = model.name == "naive"
         skill = 0.0 if is_naive else 1 - m["rmse"] / float(np.sqrt(base_sq.mean()))
         ci = (0.0, 0.0) if is_naive else skill_ci_sq((y_true - pred) ** 2, base_sq, horizon)
-        beats = bool((not is_naive) and skill > 0.02 and ci[0] > 0)
+        too_few = n_indep < MIN_INDEP_FOR_VERDICT
+        beats = bool((not is_naive) and skill > 0.02 and ci[0] > 0 and not too_few)
         if is_naive:
             verdict = "baseline"
         elif beats:
             verdict = "better"
-        elif skill > 0 and ci[0] <= 0:
+        elif skill > 0 and (ci[0] <= 0 or too_few):
             verdict = "inconclusive"
         else:
             verdict = "not_better"

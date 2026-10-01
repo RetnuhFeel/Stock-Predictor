@@ -84,6 +84,8 @@ sequenceDiagram
 | Forecast + backtest | `backend/app/forecast.py` | Gradient boosting on simple features; walk-forward CV; bootstrap CI |
 | Model report | `GET /api/model-report` | Fixed ticker list and horizon, cached 6 h, own rate limit, builds serialised |
 | Trending | `backend/app/universe.py`, `GET /api/trending` | Fixed ~106-ticker universe, one batched provider download, close-to-close return over N days, cached with stale-if-error. A momentum screen, not a prediction |
+| Timeline | `GET /api/timeline/{symbol}` | Windows (1M–5Y) cut from the single cached 5y history, downsampled with extremes kept, summary from full data |
+| Spike scenario (experimental) | `backend/app/spikes.py`, `GET /api/spikes/{symbol}` | Jump-diffusion Monte Carlo (seeded) calibrated from the ticker's own jumps, clamped to the standard forecast band, backtested walk-forward against the standard interval. Separate from the scored prediction log |
 | Model comparison | `backend/app/models.py`, `GET /api/compare-models/{symbol}` | Five models behind one interface, same walk-forward harness, per-model skill vs. naive with bootstrap CI |
 | Volatility | `backend/app/volatility.py`, `GET /api/volatility/{symbol}` | EWMA headline + HAR-style vs. "recent vol"; 1-sigma risk range with backtest coverage |
 | Prediction log | `backend/app/storage.py`, `trackrecord.py`, `GET /api/prediction-log` | Fixed allowlist logged by a token-protected scheduled task; outcomes resolved later; hash-chained rows; public read endpoint |

@@ -22,11 +22,18 @@ from .errors import InsufficientData
 
 SEED = 42
 FEATURES = ["ret_1", "ret_5", "ret_10", "ret_21", "vol_10", "vol_21", "rsi_14", "macd_hist", "dist_sma50"]
+MIN_INDEP_FOR_VERDICT = 5  # fewer independent backtest periods than this can never earn a "better" verdict
+LONG_HORIZON = 60  # at or beyond this many trading days the response carries an explicit uncertainty note
 MIN_ROWS = 250  # ~1 year of daily bars needed for a meaningful backtest
 
 
 MIN_INDEPENDENT_TESTS = 30  # below this many non-overlapping test windows, the backtest is labelled "small sample"
 N_BOOT = 300
+
+
+def not_enough_history(horizon: int, n_bars: int) -> str:
+    return (f"Not enough price history for a {horizon}-trading-day forecast with a backtest (this ticker has {n_bars} "
+            "daily bars). Longer horizons need more history; try a shorter horizon.")
 
 
 def rsi(close: pd.Series, n: int = 14) -> pd.Series:
@@ -155,7 +162,7 @@ def forecast(close: pd.Series, horizon: int) -> dict:
     data = feats.assign(target=target)
     train_df = data.dropna()  # rows whose label is known
     if len(train_df) < 150:
-        raise InsufficientData("Not enough usable rows after feature construction")
+        raise InsufficientData(not_enough_history(horizon, len(close)))
 
     X, y = train_df[FEATURES], train_df["target"]
     wf = walk_forward(X, y, horizon)
@@ -192,12 +199,21 @@ def forecast(close: pd.Series, horizon: int) -> dict:
         })
 
     # "Beats" requires a meaningful gain AND a bootstrap interval that excludes zero.
-    beats = bool(skill > 0.02 and ci_lo > 0)
+    too_few = n_independent < MIN_INDEP_FOR_VERDICT
+    beats = bool(skill > 0.02 and ci_lo > 0 and not too_few)
     notes = [
         "Interval is the empirical 10th-90th percentile of out-of-sample walk-forward errors "
         "(an ~80% band); real outcomes fall outside it regularly, especially in market stress.",
     ]
-    if not beats:
+    if horizon >= LONG_HORIZON:
+        plural = "" if n_independent == 1 else "s"
+        notes.append(f"Long horizon ({horizon} trading days): this is highly uncertain. The range is very wide, "
+                     f"five years of data hold only about {n_independent} independent backtest period{plural}, "
+                     "and the point estimate is mostly noise.")
+    if too_few and skill > 0.02 and ci_lo > 0:
+        notes.append(f"With only about {n_independent} independent backtest period{'' if n_independent == 1 else 's'} "
+                     "the apparent edge cannot be told apart from luck, so it is not counted as better than guessing.")
+    elif not beats:
         notes.append("The model did NOT meaningfully beat the naive 'price stays flat' baseline in the "
                      "backtest. Treat the point forecast as noise.")
 
@@ -223,6 +239,7 @@ def forecast(close: pd.Series, horizon: int) -> dict:
             "naive_baseline": base_m,
             "skill_vs_baseline": float(skill),
             "beats_baseline": beats,
+            "too_few_independent": bool(too_few),
             "note": "Overlapping multi-day windows make test points correlated; the 90% interval accounts "
                     "for that with a block bootstrap. Metrics are indicative only.",
         },
