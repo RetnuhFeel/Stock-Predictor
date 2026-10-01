@@ -33,6 +33,22 @@ class BaseProvider(ABC):
     def search(self, query: str) -> list[dict]:
         """[{"symbol", "name", "exchange"}, ...]"""
 
+    def batch_history(self, symbols: list[str], period: str) -> dict[str, pd.DataFrame]:
+        """Daily bars for many symbols; symbols that fail are simply absent from the result.
+
+        Default: one ``history`` call per symbol. Providers with a real batch API should override this.
+        Raises an upstream error only if nothing at all could be fetched."""
+        out: dict[str, pd.DataFrame] = {}
+        first: Exception | None = None
+        for s in symbols:
+            try:
+                out[s] = self.history(s, period)
+            except (DataUnavailable, UpstreamTimeout) as exc:
+                first = first or exc
+        if not out and first:
+            raise first
+        return out
+
     def news(self, symbol: str) -> list[dict]:
         """Recent headlines [{"headline", "source", "url", "published_at"(ISO 8601 UTC)}], newest first.
 

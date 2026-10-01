@@ -206,3 +206,15 @@ export type PredictionLog = Freshness & {
   storage: { backend: string; durable: boolean };
   disclaimer: string;
 };
+
+export type TrendingItem = { rank: number; symbol: string; name: string; return_percent: number; last_close: number; as_of: string };
+export type Trending = Freshness & {
+  days: number;
+  limit: number;
+  items: TrendingItem[];
+  universe_size: number;
+  evaluated: number;
+  method: string;
+  note: string;
+  disclaimer: string;
+};

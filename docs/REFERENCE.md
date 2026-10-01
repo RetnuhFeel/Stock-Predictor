@@ -30,7 +30,8 @@ Detailed configuration, API behaviour and operations notes. For the overview see
 | `DATABASE_URL` | backend | Storage for the prediction log. Unset = SQLite file in the temp dir (**erased on every redeploy/restart on Render's free tier**). Set a Postgres URL (`postgresql://…`) for durable storage |
 | `PREDICTION_LOG_TTL_S` | backend | Cache lifetime of `GET /api/prediction-log` (default 120) |
 | `MODELS_TTL_S` | backend | Cache lifetime of model comparison / volatility results (default 3600) |
-| `HEAVY_RATE_PER_MIN` | backend | Per-client limit for `/api/compare-models` and `/api/volatility` (default 20, on top of the global limit) |
+| `TRENDING_TTL_S` | backend | Cache lifetime of `GET /api/trending` (default 1200 = 20 min). Also `TRENDING_MIN_COVERAGE` (default 0.5), `TRENDING_MAX_DAYS` (10), `TRENDING_MAX_LIMIT` (10) |
+| `HEAVY_RATE_PER_MIN` | backend | Per-client limit for `/api/trending`, `/api/compare-models` and `/api/volatility` (default 20, on top of the global limit) |
 | `NEXT_PUBLIC_SUPPORT_URL` | web (build time) | Optional `https://` URL for a "Support this project" footer link. Unset = nothing is shown |
 | `NEXT_PUBLIC_ERROR_REPORTING` | web (build time) | `true` makes the browser POST sanitised error reports (message, stack, path) to the API. Needs `CLIENT_ERROR_LOGGING=true` on the API |
 
@@ -47,6 +48,7 @@ Detailed configuration, API behaviour and operations notes. For the overview see
 | `GET /api/model-report` | Cached backtest report card for SPY, AAPL, MSFT, NVDA, TSLA at 5 days (fixed list, no user input, own rate limit) |
 | `GET /api/compare-models/{symbol}?horizon=1..60` | Naive, drift, EWMA, ridge-AR and gradient boosting, each walk-forward (+ embargo) vs. naive: error, skill with 90% bootstrap range, direction hit rate, n tests. Cached, own rate limit |
 | `GET /api/volatility/{symbol}?horizon=1..60` | Realised-volatility forecast (EWMA headline, HAR-style, vs. "recent 21-day vol"), annualised vol, 1-sigma risk range, backtest coverage |
+| `GET /api/trending?days=3&limit=5` | Top gainers by close-to-close return over the last `days` trading days (1–10, default 3) from the fixed universe in `backend/app/universe.py`. Returns `items[{rank, symbol, name, return_percent, last_close, as_of}]`, `universe_size`, `evaluated`, `method`, `note`, `disclaimer` and the usual freshness fields. One batched provider download, cached 20 min, stale-if-error; tickers that fail or lag behind the latest trading day are skipped; too little coverage gives `503 DATA_UNAVAILABLE` (retryable). Own (heavy) rate limit |
 | `GET /api/prediction-log?limit=&offset=&symbol=&status=` | Public, paginated, cached live prediction log + live scorecard (resolved rows only) |
 | `POST /api/_tasks/run-prediction-log` | Scheduled job: log predictions for the fixed ticker list, resolve old ones. Needs `LOG_TASK_TOKEN` (disabled otherwise) |
 | `GET /api/search?q=` | Symbol search |
@@ -77,6 +79,10 @@ Interactive docs: `/docs` (Swagger UI) on any running API.
 - **Compare** (web + `GET /api/compare?symbols=AAPL,MSFT&range=6mo`): 2–5 symbols, normalised to % change from the first common date. Symbols that fail are listed in `failed` and the rest are still returned. The chart uses different dash patterns (not colour alone) and has a data table.
 - **Forecast horizon**: `GET /api/forecast/{symbol}?horizon=N`, `N` in 1–60 trading days (`422 INVALID_REQUEST` otherwise). Backtest and verdict are computed **per horizon** with an embargo of at least `N` days (reported as `embargo_days`). Longer horizons give wider intervals and far fewer independent test periods, which the UI says plainly.
 - **News** (`GET /api/news/{symbol}`): headline, source, link and time only (via the active provider; Yahoo for `yfinance`, nothing for providers without news). Article text is never fetched. Shown as "context, not a signal"; an empty list is a normal response.
+
+- **Lists and Trending** (web + `GET /api/trending`): the default list, "Trending (3-day)", is read-only and filled from the endpoint; it shows loading, error and "may be outdated" states and falls back to the last copy saved on the device. User lists are stored in `localStorage` (`lists.v2`, versioned; the old `watchlist.v1` is migrated once into "My watchlist" and left untouched). Limits: 20 lists, 50 tickers per list, 40-character names; symbols are upper-cased and validated; corrupt or oversized saved data falls back to defaults, and a full/blocked storage shows a warning instead of crashing.
+  - **Universe:** a static, curated list of ~106 liquid US large caps in `backend/app/universe.py` (edit it and redeploy to change it). Stocks outside it can never appear in Trending.
+  - **Limitations:** it ranks only past 3-day price change, so it is a momentum screen and **not a recommendation, signal or prediction**; gains often partly reverse. Data comes from Yahoo via `yfinance`, which is unofficial, can be delayed or rate-limited (then you get cached/stale data or a clear error). The server cache is in-memory, per instance and lost on restart, so the first request after a cold start can take several seconds. The ranking ignores splits/dividends beyond what adjusted closes provide.
 
 ## Observability and privacy
 

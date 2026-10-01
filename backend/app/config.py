@@ -52,6 +52,12 @@ MODEL_REPORT_RATE_PER_MIN = int(os.getenv("MODEL_REPORT_RATE_PER_MIN", "6"))  # 
 HEAVY_RATE_PER_MIN = int(os.getenv("HEAVY_RATE_PER_MIN", "20"))  # per client, for compare-models and volatility
 MODELS_TTL_S = int(os.getenv("MODELS_TTL_S", "3600"))
 
+# --- trending momentum screen ---
+TRENDING_TTL_S = int(os.getenv("TRENDING_TTL_S", "1200"))   # 20 min
+TRENDING_MIN_COVERAGE = 0.5   # need data for at least this share of the universe, else treat as unavailable
+TRENDING_MAX_DAYS = 10
+TRENDING_MAX_LIMIT = 10
+
 # --- live prediction log ---
 # Fixed allowlist, logged by a scheduled job only (never per user request), so storage is bounded and nothing
 # about any visitor is recorded.

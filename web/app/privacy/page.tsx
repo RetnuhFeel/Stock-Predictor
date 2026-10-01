@@ -10,12 +10,12 @@ export default function Privacy() {
       <h2>Summary</h2>
       <ul>
         <li>No accounts, sign-in or cookies, and no advertising, fingerprinting or third-party analytics trackers.</li>
-        <li>Your watchlist, price alerts, theme choice and last-seen data are stored only on your device (<code>localStorage</code>) and are never sent to a server.</li>
+        <li>Your named lists of tickers (and which list you last viewed), price alerts, theme choice and last-seen data are stored only on your device (<code>localStorage</code>) and are never sent to a server.</li>
         <li>The server keeps anonymous, aggregate usage counters in memory and short-lived technical logs without IP addresses (details below).</li>
       </ul>
       <h2>What is stored on your device</h2>
       <ul>
-        <li>Watchlist, price alerts (symbol, direction, target price, whether it triggered), theme and your acknowledgement of the disclaimer.</li>
+        <li>Your lists (names and ticker symbols) and the last-selected list, price alerts (symbol, direction, target price, whether it triggered), theme and your acknowledgement of the disclaimer.</li>
         <li>A copy of the most recent data you viewed (quotes, charts, forecasts, headlines) so the app can show it, labelled as possibly outdated, when you are offline or the server is slow.</li>
         <li>A service worker caches the app&apos;s own pages and static files for offline use. It does not cache API responses or errors.</li>
       </ul>
@@ -29,7 +29,7 @@ export default function Privacy() {
         <li><strong>Hosting provider:</strong> your host (for example Render) and its network may keep their own logs, including IP addresses, under their own policies.</li>
       </ul>
       <h2>Error reports (optional, off by default)</h2>
-      <p>If the operator enables it, the app may send a small error report when something breaks: the error message, a stack trace and the page path. It contains no watchlist, alerts, IP address or other personal data, is limited in size and frequency, and is written to the server log. If the operator configures an optional error-tracking service (Sentry), reports go to that service under its own privacy policy.</p>
+      <p>If the operator enables it, the app may send a small error report when something breaks: the error message, a stack trace and the page path. It contains no lists, alerts, IP address or other personal data, is limited in size and frequency, and is written to the server log. If the operator configures an optional error-tracking service (Sentry), reports go to that service under its own privacy policy.</p>
       <h2>Third parties</h2>
       <p>The API retrieves market data and headlines from Yahoo Finance (via the open-source <code>yfinance</code> library). Only ticker symbols and search terms are sent upstream, not information about you, but the provider sees the API server&apos;s requests. News headlines link out to third-party sites, which have their own privacy practices.</p>
       <h2>Cookies</h2>

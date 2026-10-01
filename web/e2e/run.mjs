@@ -15,7 +15,7 @@ const ok = (c, m) => { console.log(`${c ? "PASS" : "FAIL"}  ${m}`); if (!c) fail
 
 const browser = await chromium.launch({ executablePath: CHROME, args: ["--no-sandbox"], headless: true });
 
-async function fresh({ dark = false, accept = true } = {}) {
+async function fresh({ dark = false, accept = true, mine = true } = {}) {
   const context = await browser.newContext({ colorScheme: dark ? "dark" : "light", viewport: { width: 1200, height: 900 } });
   await context.grantPermissions([], {});
   const page = await context.newPage();
@@ -25,6 +25,8 @@ async function fresh({ dark = false, accept = true } = {}) {
   if (accept) {
     await page.getByRole("button", { name: /I understand/i }).click();
     await page.waitForSelector("html[data-ack]");
+    // Trending (live movers) is the default list; most checks below use the stable AAPL/MSFT/NVDA "My watchlist".
+    if (mine) await page.getByRole("combobox", { name: "List", exact: true }).selectOption("default");
   }
   return { context, page, errors };
 }
@@ -90,7 +92,7 @@ const settle = (page) => page.waitForLoadState("networkidle").catch(() => {});
   await axe(page, "home, forecast view with horizon 20 + table open (light)");
 
   // ---- alerts
-  const priceTxt = await page.locator("ul[aria-label=Watchlist] li button[aria-pressed=true]").first().getAttribute("aria-label");
+  const priceTxt = await page.locator("ul[aria-label='My watchlist tickers'] li button[aria-pressed=true]").first().getAttribute("aria-label");
   await page.getByLabel("Price (USD)").fill("0.5");
   await page.getByLabel(/is$/).selectOption("below");
   await page.getByRole("button", { name: "Add alert" }).click(); // below 0.5: should not fire
@@ -215,6 +217,19 @@ if (process.env.LOG_TASK_TOKEN) {
   await context.close();
 }
 
+// ---- 3b. Trending default list against the real backend
+{
+  const { context, page } = await fresh({ mine: false });
+  const sel = page.getByRole("combobox", { name: "List", exact: true });
+  ok((await sel.inputValue()) === "trending", "Trending (3-day) is the default list (live)");
+  await page.getByText(/not a recommendation or a prediction/i).first().waitFor({ timeout: 90000 });
+  const rows = page.getByRole("list", { name: /Trending \(3-day\), read-only/ }).locator("> li");
+  await rows.first().waitFor({ timeout: 90000 });
+  ok((await rows.count()) === 5, "live trending shows 5 tickers");
+  await axe(page, "trending list (live)");
+  await context.close();
+}
+
 // ---- 4. Offline watchlist
 {
   const { context, page } = await fresh();
@@ -223,13 +238,13 @@ if (process.env.LOG_TASK_TOKEN) {
   await page.evaluate(() => navigator.serviceWorker.ready);
   await page.reload(); await settle(page); // let the SW take control and cache the shell
   ok(await page.evaluate(() => !!navigator.serviceWorker.controller), "service worker controls the page");
-  const aaplOnline = await page.locator("ul[aria-label=Watchlist] li").first().innerText();
+  const aaplOnline = await page.locator("ul[aria-label='My watchlist tickers'] li").first().innerText();
   await page.waitForTimeout(1500);
   await context.setOffline(true);
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByText(/You're offline/).waitFor({ timeout: 15000 });
   ok(true, "app shell loads offline with an 'offline / may be outdated' label");
-  const first = page.locator("ul[aria-label=Watchlist] li").first();
+  const first = page.locator("ul[aria-label='My watchlist tickers'] li").first();
   await first.getByText(/\$\d/).waitFor({ timeout: 15000 });
   ok(/\$\d/.test(await first.innerText()), `watchlist shows last-known price offline (was: ${aaplOnline.replace(/\n/g, " ")})`);
   ok(await page.getByText(/may be outdated/i).first().isVisible(), "'may be outdated' wording visible");
