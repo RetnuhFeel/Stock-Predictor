@@ -1,7 +1,7 @@
 """Describe how fresh a response's data is, in a provider-independent way."""
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -49,3 +49,26 @@ def describe(last_bar: date, fetched_at: float, served_from_stale_cache: bool) -
     if stale and not served_from_stale_cache:
         out["warnings"] = [_stale_warning(f"the latest price bar is {lag} business days old")]
     return out
+
+
+# --- market clock (used to refuse partial intraday bars) ---------------------------------------------------
+MARKET_CLOSE_NY = time(16, 0)
+CLOSE_BUFFER = timedelta(minutes=10)  # providers publish the final daily bar a little after the bell
+
+
+def now_ny() -> datetime:
+    return datetime.now(ZoneInfo("America/New_York"))
+
+
+def bar_is_final(bar_date: date, now: datetime | None = None) -> bool:
+    """False if ``bar_date`` is today (New York) and the regular session has not closed yet, because providers
+    return a partial, still-changing bar for the current day while the market is open. Conservative on early-close
+    days (waits until 16:10 ET). Future dates are never final."""
+    now = now or now_ny()
+    if bar_date < now.date():
+        return True
+    if bar_date > now.date():
+        return False
+    if now.weekday() >= 5:  # a bar dated on a weekend cannot be a live session
+        return True
+    return now >= datetime.combine(now.date(), MARKET_CLOSE_NY, tzinfo=now.tzinfo) + CLOSE_BUFFER

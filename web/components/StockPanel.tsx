@@ -27,6 +27,9 @@ const pct = (x: number | null | undefined, d = 2) => (x == null ? "—" : `${(x 
 const money = (x: number) => `$${x.toFixed(2)}`;
 const spct = (x: number, d = 1) => `${x >= 0 ? "+" : ""}${x.toFixed(d)}%`;
 
+/** Honest label for the forecast range: only called "80% interval" when it is backtest-calibrated. */
+const rangeLabel = (f?: Forecast) => (f && f.interval_calibrated === false ? "volatility range (not backtest-calibrated)" : "80% interval");
+
 function ChartTable({ history, forecast }: { history: Timeline; forecast?: Forecast }) {
   const base = history.points[0]?.close ?? 1;
   const long = rangeLong(history.range);
@@ -35,8 +38,8 @@ function ChartTable({ history, forecast }: { history: Timeline; forecast?: Forec
       <summary className="cursor-pointer font-medium">View chart data as a table</summary>
       <div className="mt-2 max-h-72 overflow-auto" tabIndex={0} role="region" aria-label={`Scrollable table of ${history.symbol} prices`}>
         <table className="w-full text-sm">
-          <caption className="sr-only">Closing prices for {history.symbol} over the past {long}{history.downsampled ? " (sampled)" : ""}{forecast ? ", followed by the forecast path with its 80% interval" : ""}</caption>
-          <thead><tr className="text-left text-slate-600 dark:text-slate-300"><th scope="col">Date</th><th scope="col">Type</th><th scope="col" className="text-right">Price</th><th scope="col" className="text-right">80% range</th><th scope="col" className="text-right">Change since start of range</th></tr></thead>
+          <caption className="sr-only">Closing prices for {history.symbol} over the past {long}{history.downsampled ? " (sampled)" : ""}{forecast ? ", followed by the forecast path with its {rangeLabel(forecast)}" : ""}</caption>
+          <thead><tr className="text-left text-slate-600 dark:text-slate-300"><th scope="col">Date</th><th scope="col">Type</th><th scope="col" className="text-right">Price</th><th scope="col" className="text-right">{forecast?.interval_calibrated === false ? "Volatility range" : "80% range"}</th><th scope="col" className="text-right">Change since start of range</th></tr></thead>
           <tbody>
             {forecast?.path.map((p) => (<tr key={"f" + p.date} className="border-t border-slate-200 dark:border-slate-800"><td>{p.date}</td><td>Forecast</td><td className="text-right">{money(p.mid)}</td><td className="text-right">{money(p.low)} – {money(p.high)}</td><td className="text-right">{spct((p.mid / base - 1) * 100)}</td></tr>))}
             {[...history.points].reverse().map((p) => (<tr key={p.date} className="border-t border-slate-200 dark:border-slate-800"><td>{p.date}</td><td>Close</td><td className="text-right">{money(p.close)}</td><td className="text-right">—</td><td className="text-right">{spct((p.close / base - 1) * 100)}</td></tr>))}
@@ -69,14 +72,14 @@ function Chart({ history, forecast, normalized }: { history: Timeline; forecast?
   const s = history.summary;
   return (
     <div className="h-72 w-full" role="img"
-      aria-label={`${normalized ? "Percent change" : "Price"} chart for ${history.symbol} over the past ${rangeLong(history.range)}${forecast ? ` with ${forecast.horizon_days}-day forecast and 80% interval` : ""}: ${spct(s.period_return_pct)} over the range, high ${money(s.high)}, low ${money(s.low)}. A table is available below.`}>
+      aria-label={`${normalized ? "Percent change" : "Price"} chart for ${history.symbol} over the past ${rangeLong(history.range)}${forecast ? ` with ${forecast.horizon_days}-day forecast and ${rangeLabel(forecast)}` : ""}: ${spct(s.period_return_pct)} over the range, high ${money(s.high)}, low ${money(s.low)}. A table is available below.`}>
       <ResponsiveContainer>
         <ComposedChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid strokeOpacity={0.15} />
           <XAxis dataKey="date" tick={{ fontSize: 11 }} minTickGap={40} />
           <YAxis domain={["auto", "auto"]} tick={{ fontSize: 11 }} width={52} tickFormatter={(v) => (normalized ? `${Number(v).toFixed(0)}%` : `$${Number(v).toFixed(0)}`)} />
           <Tooltip formatter={(v) => { const f = (n: unknown) => (normalized ? `${Number(n).toFixed(1)}%` : Number(n).toFixed(2)); return Array.isArray(v) ? v.map(f).join(" – ") : f(v); }} />
-          <Area dataKey="band" name="80% interval" stroke="none" fill="#f59e0b" fillOpacity={0.25} isAnimationActive={false} />
+          <Area dataKey="band" name={rangeLabel(forecast)} stroke="none" fill="#f59e0b" fillOpacity={0.25} isAnimationActive={false} />
           <Line dataKey="close" name="Close" stroke="#3b82f6" dot={false} strokeWidth={2} isAnimationActive={false} />
           <Line dataKey="mid" name="Forecast" stroke="#f59e0b" strokeDasharray="5 4" dot={false} strokeWidth={2} isAnimationActive={false} />
         </ComposedChart>
@@ -150,9 +153,15 @@ export function StockPanel({ symbol }: { symbol: string }) {
             </p>
             <p className="text-sm">
               Experimental {fc.data.horizon_days}-day estimate: <strong>${fc.data.predicted_price.toFixed(2)}</strong>{" "}
-              ({fc.data.predicted_return >= 0 ? "+" : ""}{pct(fc.data.predicted_return)}) — 80% interval{" "}
+              ({fc.data.predicted_return >= 0 ? "+" : ""}{pct(fc.data.predicted_return)}) — {rangeLabel(fc.data)}{" "}
               <strong>${fc.data.interval_80.low.toFixed(2)} – ${fc.data.interval_80.high.toFixed(2)}</strong>
             </p>
+            {fc.data.interval_calibrated === false && (
+              <p className="mt-1 text-xs font-medium text-amber-900 dark:text-amber-200">
+                Uncalibrated range: at this horizon there are too few independent backtest periods to calibrate an interval, so this is a
+                volatility range around today&apos;s price, not a tested 80% interval. The point estimate is shown for reference and is mostly noise.
+              </p>
+            )}
             <ul className="mt-2 list-disc pl-5 text-xs text-slate-600 dark:text-slate-300">{fc.data.notes.map((n) => (<li key={n}>{n}</li>))}</ul>
             <p className="mt-2 text-xs font-medium">{fc.data.disclaimer}</p>
           </section>

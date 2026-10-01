@@ -60,6 +60,12 @@ def _dataset(close: pd.Series, horizon: int) -> tuple[pd.DataFrame, pd.DataFrame
     return feats, label
 
 
+def ewma_daily_vol(close: pd.Series) -> float:
+    """Latest RiskMetrics EWMA daily log-return volatility (lambda 0.94). Cheap: no walk-forward fit."""
+    r2 = np.log(close.dropna()[lambda c: c > 0]).diff() ** 2
+    return float(np.sqrt(r2.ewm(alpha=1 - LAMBDA, adjust=False).mean()).clip(lower=FLOOR).iloc[-1])
+
+
 def forecast_volatility(close: pd.Series, horizon: int, n_folds: int = 6) -> dict:
     close = close.dropna()
     close = close[close > 0]

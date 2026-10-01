@@ -5,7 +5,8 @@ Model:  HistGradientBoostingRegressor on simple technical features.
 Check:  expanding-window walk-forward validation (chronological, with a ``horizon``-day embargo
         so training labels never overlap the test period), compared with the naive persistence
         baseline "price stays where it is" (predicted return = 0).
-Bands:  empirical quantiles of the out-of-sample walk-forward errors (80% interval).
+Bands:  empirical quantiles of the out-of-sample walk-forward errors (80% interval); at horizons >=
+        config.VOL_CONE_MIN_HORIZON a volatility cone around the last close, labelled uncalibrated.
 
 Daily stock returns are close to unpredictable. In most cases this model will NOT beat the
 baseline by a meaningful margin, and the response says so explicitly.
@@ -18,6 +19,7 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingRegressor
 
+from . import config
 from .errors import InsufficientData
 
 SEED = 42
@@ -29,6 +31,7 @@ MIN_ROWS = 250  # ~1 year of daily bars needed for a meaningful backtest
 
 MIN_INDEPENDENT_TESTS = 30  # below this many non-overlapping test windows, the backtest is labelled "small sample"
 N_BOOT = 300
+Z80 = 1.2815515655446004  # standard-normal 90th percentile: half-width of a nominal 80% band in sigmas
 
 
 def not_enough_history(horizon: int, n_bars: int) -> str:
@@ -188,23 +191,46 @@ def forecast(close: pd.Series, horizon: int) -> dict:
     last_date = close.index[-1]
     bdays = pd.bdate_range(last_date, periods=horizon + 1)[1:]
 
+    # Short/medium horizons: the empirical 10th-90th percentile of out-of-sample errors, centred on the model's
+    # point estimate (calibrated against the backtest). At long horizons five years of data hold only a handful of
+    # independent windows, so those residual quantiles are not a trustworthy 80% band and the point estimate is
+    # mostly noise: the band is then a plain volatility cone centred on today's price, and labelled uncalibrated.
+    cone = horizon >= config.VOL_CONE_MIN_HORIZON
+    if cone:
+        from .volatility import ewma_daily_vol  # local import: volatility imports this module
+        daily = ewma_daily_vol(close)
+        if not np.isfinite(daily) or daily <= 0:
+            daily = float(np.log(close).diff().std())
+        q_lo, q_hi, centre = -Z80 * daily * np.sqrt(horizon), Z80 * daily * np.sqrt(horizon), 0.0
+    else:
+        q_lo, q_hi, centre = q10, q90, point
+
     path = []
     for i, d in enumerate(bdays, start=1):
         frac = np.sqrt(i / horizon)  # widen like sqrt(time); an approximation of the cone
+        mid = centre * i / horizon
         path.append({
             "date": d.strftime("%Y-%m-%d"),
-            "mid": round(last * float(np.exp(point * i / horizon)), 4),
-            "low": round(last * float(np.exp(point * i / horizon + q10 * frac)), 4),
-            "high": round(last * float(np.exp(point * i / horizon + q90 * frac)), 4),
+            "mid": round(last * float(np.exp(mid)), 4),
+            "low": round(last * float(np.exp(mid + q_lo * frac)), 4),
+            "high": round(last * float(np.exp(mid + q_hi * frac)), 4),
         })
 
     # "Beats" requires a meaningful gain AND a bootstrap interval that excludes zero.
     too_few = n_independent < MIN_INDEP_FOR_VERDICT
     beats = bool(skill > 0.02 and ci_lo > 0 and not too_few)
-    notes = [
-        "Interval is the empirical 10th-90th percentile of out-of-sample walk-forward errors "
-        "(an ~80% band); real outcomes fall outside it regularly, especially in market stress.",
-    ]
+    if cone:
+        notes = [
+            f"Horizons of {config.VOL_CONE_MIN_HORIZON}+ trading days: the range is a volatility cone around today's "
+            "price (EWMA volatility, normal approximation, nominally 80%), NOT a backtest-calibrated interval. "
+            "There are too few independent backtest periods to calibrate one, and the model's point estimate is "
+            "shown for reference only. Real outcomes can fall outside this range, especially in market stress.",
+        ]
+    else:
+        notes = [
+            "Interval is the empirical 10th-90th percentile of out-of-sample walk-forward errors "
+            "(an ~80% band); real outcomes fall outside it regularly, especially in market stress.",
+        ]
     if horizon >= LONG_HORIZON:
         plural = "" if n_independent == 1 else "s"
         notes.append(f"Long horizon ({horizon} trading days): this is highly uncertain. The range is very wide, "
@@ -223,8 +249,14 @@ def forecast(close: pd.Series, horizon: int) -> dict:
         "last_date": last_date.strftime("%Y-%m-%d"),
         "predicted_return": point,
         "predicted_price": round(last * float(np.exp(point)), 4),
-        "interval_80": {"low": round(last * float(np.exp(point + q10)), 4),
-                        "high": round(last * float(np.exp(point + q90)), 4)},
+        "interval_80": {"low": round(last * float(np.exp(centre + q_lo)), 4),
+                        "high": round(last * float(np.exp(centre + q_hi)), 4)},
+        "interval_calibrated": not cone,
+        "interval_method": ("volatility_cone: EWMA (lambda 0.94) daily volatility x sqrt(horizon), centred on the "
+                            "last close, nominal 80% under a normal approximation; not backtest-calibrated"
+                            if cone else
+                            "walk_forward_residuals: 10th-90th percentile of out-of-sample errors around the point "
+                            "estimate"),
         "path": path,
         "backtest": {
             "method": f"expanding-window walk-forward, {wf.n_folds} folds, {horizon}-day embargo",

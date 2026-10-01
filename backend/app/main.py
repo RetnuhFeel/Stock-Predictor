@@ -7,7 +7,6 @@ import os
 import tempfile
 import threading
 import time
-from collections import defaultdict, deque
 
 import numpy as np
 import pandas as pd
@@ -29,7 +28,7 @@ from .errors import (
     Unauthorized,
 )
 from .forecast import forecast
-from .freshness import describe, describe_fetch, today_ny
+from .freshness import bar_is_final, describe, describe_fetch, today_ny
 from .models import compare_models
 from .observability import (
     Stats,
@@ -43,10 +42,11 @@ from .observability import (
     setup_logging,
 )
 from .providers import BaseProvider, create_provider
+from .ratelimit import RateLimiter, client_key
 from .spikes import spike_forecast
 from .storage import PredictionStore, now_iso
 from .symbols import normalize_symbol
-from .trackrecord import public_row, record_from_forecast, resolve_pending, scorecard
+from .trackrecord import hash_spec, public_row, record_from_forecast, resolve_pending, scorecard
 from .volatility import forecast_volatility
 
 log = setup_logging()
@@ -55,6 +55,9 @@ app = FastAPI(title="Stock Predictor API", version="1.2.0",
               description="Educational stock data & experimental forecasts. " + config.DISCLAIMER)
 
 cache = TTLCache()
+# /api/search has unbounded key space (any user-typed string), so it gets its own small cache: a flood of distinct
+# searches can only evict other searches, never price history that the forecast pages depend on.
+search_cache = TTLCache(max_items=config.SEARCH_CACHE_MAX_ITEMS)
 stats = Stats()
 _provider: BaseProvider | None = None
 
@@ -66,30 +69,18 @@ def get_provider() -> BaseProvider:
     return _provider
 
 
-# --- rate limiting: simple in-memory sliding window per client (single-process only) ---
-_hits: dict[str, deque] = defaultdict(deque)
-_hits_lock = threading.Lock()
+# --- rate limiting: in-memory sliding window per client (single-process only; see ratelimit.py) ---
+limiter = RateLimiter(config.RATE_LIMIT_MAX_KEYS)
 
 
 def _client_id(request: Request) -> str:
-    if config.TRUST_PROXY and (fwd := request.headers.get("x-forwarded-for")):
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    return client_key(request.client.host if request.client else None, request.headers.get("x-forwarded-for"),
+                      config.TRUST_PROXY, config.TRUSTED_PROXY_HOPS)
 
 
 def _limited(bucket: str, cid: str, limit: int, now: float) -> int | None:
     """Record a hit; return seconds to wait if the client is over ``limit`` per minute, else None."""
-    with _hits_lock:
-        q = _hits[f"{bucket}:{cid}"]
-        while q and q[0] <= now - 60:
-            q.popleft()
-        if len(q) >= limit:
-            return max(int(60 - (now - q[0])) + 1, 1)
-        q.append(now)
-        if len(_hits) > 10_000:  # bound memory
-            for k in [k for k, v in _hits.items() if not v]:
-                _hits.pop(k, None)
-    return None
+    return limiter.hit(bucket, cid, limit, now)
 
 
 @app.middleware("http")
@@ -116,7 +107,14 @@ async def observe_and_limit(request: Request, call_next):
                            "retryable": True, "retry_after": retry}},
                 status_code=429, headers={"Retry-After": str(retry)})
         else:
-            response = await call_next(request)
+            try:
+                response = await call_next(request)
+            except Exception as exc:  # noqa: BLE001 - last resort; ApiError & validation have their own handlers
+                # Handled HERE (inside the CORS middleware) so the 500 still carries CORS headers, the request id,
+                # and is counted in stats and the request log, which Starlette's outermost handler would skip.
+                request.state.error_code = "INTERNAL_ERROR"
+                log.error("unhandled", exc_info=exc, extra={"ctx": {"route": path}})
+                response = _internal_error_response()
         response.headers["X-Request-ID"] = rid
         if path != "/health":
             route = request.scope.get("route")
@@ -154,13 +152,18 @@ async def _validation_error(request: Request, exc: RequestValidationError):
                         status_code=422)
 
 
-@app.exception_handler(Exception)
-async def _unhandled(request: Request, exc: Exception):
-    request.state.error_code = "INTERNAL_ERROR"
-    log.error("unhandled", exc_info=exc, extra={"ctx": {"route": request.url.path}})
+def _internal_error_response() -> JSONResponse:
     return JSONResponse({"error": {"code": "INTERNAL_ERROR", "retryable": True,
                                    "message": "Unexpected server error. Please try again."}}, status_code=500,
                         headers={"X-Request-ID": request_id_var.get()})
+
+
+@app.exception_handler(Exception)
+async def _unhandled(request: Request, exc: Exception):
+    """Fallback for errors raised outside the observe_and_limit middleware (it handles the normal case itself)."""
+    request.state.error_code = "INTERNAL_ERROR"
+    log.error("unhandled", exc_info=exc, extra={"ctx": {"route": request.url.path}})
+    return _internal_error_response()
 
 
 def _history(provider: BaseProvider, symbol: str, period: str) -> Fetched:
@@ -281,7 +284,8 @@ async def client_error(request: Request):
 
 @app.get("/api/search")
 def search(q: str = Query(..., min_length=1, max_length=40), provider: BaseProvider = Depends(get_provider)):
-    got = cache.fetch(("search", provider.name, q.lower()), 3600, lambda: provider.search(q), stale_max_age=86400)
+    got = search_cache.fetch(("search", provider.name, q.lower()), 3600, lambda: provider.search(q),
+                             stale_max_age=86400)
     return {"results": got.value}
 
 
@@ -528,9 +532,14 @@ def run_prediction_log(request: Request, provider: BaseProvider = Depends(get_pr
             continue
         base = df.index[-1].date()
         lag = int(np.busday_count(base, today_ny()))
-        if hist.stale or lag > 3:
+        if hist.stale or lag > 1:
             # Stale data could mean the outcome is already known (hindsight), so it is never logged.
+            # At most one business day behind: the previous session's close on a normal morning/weekend run.
             skipped.append({"symbol": sym, "reason": "STALE_DATA"})
+            continue
+        if not bar_is_final(base):
+            # Today's bar before the close is a partial intraday value, not a close: never log a base from it.
+            skipped.append({"symbol": sym, "reason": "PARTIAL_BAR"})
             continue
         if store.add_prediction(record_from_forecast(result, df["Close"])):
             logged.append(sym)
@@ -559,7 +568,8 @@ def prediction_log(limit: int = Query(25, ge=1, le=100), offset: int = Query(0, 
         pg = store.page(limit, offset, sym, status)
         rows = store.all_rows()
         return {"items": [public_row(r) for r in pg.items], "total": pg.total, "limit": limit, "offset": offset,
-                "scorecard": scorecard(rows, config.LOG_HORIZON), "chain_ok": store.verify_chain(),
+                "scorecard": scorecard(rows, config.LOG_HORIZON), **store.verify_report(rows),
+                "hash_spec": hash_spec(),
                 "symbols": config.LOG_SYMBOLS, "horizon_days": config.LOG_HORIZON,
                 "storage": {"backend": store.backend, "durable": store.backend != "sqlite"}}
 
@@ -569,7 +579,9 @@ def prediction_log(limit: int = Query(25, ge=1, le=100), offset: int = Query(0, 
 
 
 # --- trending momentum screen --------------------------------------------------------------------------
-_trending_lock = threading.Lock()  # one universe download at a time, however many requests arrive together
+# Concurrent cold requests for the SAME window share one download via the cache's single-flight; this lock only
+# keeps requests for DIFFERENT windows from downloading the whole universe at the same moment.
+_trending_lock = threading.Lock()
 
 
 def _compute_trending(provider: BaseProvider, days: int) -> dict:

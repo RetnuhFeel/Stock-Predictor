@@ -48,6 +48,9 @@ export type Forecast = Freshness & {
   predicted_return: number;
   predicted_price: number;
   interval_80: { low: number; high: number };
+  /** false at long horizons: the range is a volatility cone, not a backtest-calibrated 80% interval */
+  interval_calibrated?: boolean;
+  interval_method?: string;
   path: { date: string; mid: number; low: number; high: number }[];
   backtest: Backtest;
   notes: string[];
@@ -200,6 +203,8 @@ export type PredictionLog = Freshness & {
   offset: number;
   scorecard: Scorecard;
   chain_ok: boolean;
+  outcomes_ok?: boolean;
+  unsealed_resolved?: number;
   symbols: string[];
   horizon_days: number;
   storage: { backend: string; durable: boolean };

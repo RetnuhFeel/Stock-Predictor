@@ -33,7 +33,8 @@ export function TrackRecord() {
           Once a day after the US market closes, a scheduled job records the model&apos;s {d?.horizon_days ?? 5}-trading-day forecast for a fixed list of tickers
           {d ? ` (${d.symbols.join(", ")})` : ""}. Each record is stored <strong>before</strong> the outcome exists, and is never changed afterwards: only the realised
           result is filled in once the horizon has passed. Each entry carries a hash chained to the one before it, so a quiet edit of an old row would break the
-          chain{d && <> (chain check right now: <strong>{d.chain_ok ? "intact" : "BROKEN"}</strong>)</>}.
+          chain{d && <> (chain check right now: <strong>{d.chain_ok ? "intact" : "BROKEN"}</strong>
+          {d.outcomes_ok !== undefined && <>; outcome seals: <strong>{d.outcomes_ok ? "intact" : "BROKEN"}</strong>{d.unsealed_resolved ? `, ${d.unsealed_resolved} older result${d.unsealed_resolved === 1 ? "" : "s"} predate seals` : ""}</>})</>}.
         </p>
         <p className="text-xs">
           Limits: this is tamper-<em>evidence</em>, not proof — whoever runs the database could rebuild it. Nothing is logged for visitors; only this fixed ticker list is recorded.

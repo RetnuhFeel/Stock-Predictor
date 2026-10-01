@@ -40,7 +40,15 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(out, default=str)
 
 
+def disable_server_access_log() -> None:
+    """Belt and braces for hosts that start uvicorn with their own command (so the Dockerfile flag is not used):
+    uvicorn's access log records the client address and the full URL including the query string. Our own
+    ``request`` log event replaces it and carries neither."""
+    logging.getLogger("uvicorn.access").disabled = True
+
+
 def setup_logging() -> logging.Logger:
+    disable_server_access_log()
     log = logging.getLogger("stock-api")
     log.setLevel(config.LOG_LEVEL)
     if not log.handlers:
