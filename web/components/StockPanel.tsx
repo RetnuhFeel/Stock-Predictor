@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { useApi } from "@/lib/api";
 import { BacktestSummary } from "./BacktestSummary";
@@ -7,12 +7,12 @@ import { useOnline } from "@/lib/online";
 import { ModelComparison } from "./ModelComparison";
 import { NewsPanel } from "./NewsPanel";
 import { ErrorNotice, OutdatedLabel } from "./Notices";
-import { PerformanceTimeline } from "./PerformanceTimeline";
 import { SpikePanel } from "./SpikePanel";
 import { VolatilityPanel } from "./VolatilityPanel";
-import type { Forecast, History } from "@/lib/types";
+import { buildRows, CHART_RANGES, rangeLong } from "@/lib/chartRange";
+import { useChartRange } from "@/lib/chartRangeStore";
+import type { Forecast, Timeline } from "@/lib/types";
 
-const RANGES = ["1mo", "3mo", "6mo", "1y", "2y"] as const;
 const HORIZONS = [5, 10, 20, 60, 120, 180, 256]; // trading days; the backend validates 1..256
 const LONG_HORIZON = 60;
 function ForecastNote() {
@@ -24,21 +24,22 @@ function ForecastNote() {
 }
 
 const pct = (x: number | null | undefined, d = 2) => (x == null ? "—" : `${(x * 100).toFixed(d)}%`);
+const money = (x: number) => `$${x.toFixed(2)}`;
+const spct = (x: number, d = 1) => `${x >= 0 ? "+" : ""}${x.toFixed(d)}%`;
 
-type Row = { date: string; close?: number; mid?: number; band?: [number, number] };
-
-function ChartTable({ history, forecast }: { history: History; forecast?: Forecast }) {
-  const recent = history.points.slice(-10);
+function ChartTable({ history, forecast }: { history: Timeline; forecast?: Forecast }) {
+  const base = history.points[0]?.close ?? 1;
+  const long = rangeLong(history.range);
   return (
     <details className="text-sm">
       <summary className="cursor-pointer font-medium">View chart data as a table</summary>
-      <div className="mt-2 overflow-x-auto">
+      <div className="mt-2 max-h-72 overflow-auto" tabIndex={0} role="region" aria-label={`Scrollable table of ${history.symbol} prices`}>
         <table className="w-full text-sm">
-          <caption className="sr-only">Recent closing prices{forecast ? " and forecast path with 80% interval" : ""} for {history.symbol}</caption>
-          <thead><tr className="text-left text-slate-600 dark:text-slate-300"><th scope="col">Date</th><th scope="col">Type</th><th scope="col" className="text-right">Price</th><th scope="col" className="text-right">80% range</th></tr></thead>
+          <caption className="sr-only">Closing prices for {history.symbol} over the past {long}{history.downsampled ? " (sampled)" : ""}{forecast ? ", followed by the forecast path with its 80% interval" : ""}</caption>
+          <thead><tr className="text-left text-slate-600 dark:text-slate-300"><th scope="col">Date</th><th scope="col">Type</th><th scope="col" className="text-right">Price</th><th scope="col" className="text-right">80% range</th><th scope="col" className="text-right">Change since start of range</th></tr></thead>
           <tbody>
-            {recent.map((p) => (<tr key={p.date} className="border-t border-slate-200 dark:border-slate-800"><td>{p.date}</td><td>Close</td><td className="text-right">${p.close.toFixed(2)}</td><td className="text-right">—</td></tr>))}
-            {forecast?.path.map((p) => (<tr key={"f" + p.date} className="border-t border-slate-200 dark:border-slate-800"><td>{p.date}</td><td>Forecast</td><td className="text-right">${p.mid.toFixed(2)}</td><td className="text-right">${p.low.toFixed(2)} – ${p.high.toFixed(2)}</td></tr>))}
+            {forecast?.path.map((p) => (<tr key={"f" + p.date} className="border-t border-slate-200 dark:border-slate-800"><td>{p.date}</td><td>Forecast</td><td className="text-right">{money(p.mid)}</td><td className="text-right">{money(p.low)} – {money(p.high)}</td><td className="text-right">{spct((p.mid / base - 1) * 100)}</td></tr>))}
+            {[...history.points].reverse().map((p) => (<tr key={p.date} className="border-t border-slate-200 dark:border-slate-800"><td>{p.date}</td><td>Close</td><td className="text-right">{money(p.close)}</td><td className="text-right">—</td><td className="text-right">{spct((p.close / base - 1) * 100)}</td></tr>))}
           </tbody>
         </table>
       </div>
@@ -46,26 +47,35 @@ function ChartTable({ history, forecast }: { history: History; forecast?: Foreca
   );
 }
 
-function Chart({ history, forecast }: { history: History; forecast?: Forecast }) {
-  const data = useMemo(() => {
-    const rows: Row[] = history.points.map((p) => ({ date: p.date, close: p.close }));
-    if (forecast && rows.length) {
-      const last = rows[rows.length - 1];
-      last.mid = last.close;
-      last.band = [last.close!, last.close!];
-      forecast.path.forEach((p) => rows.push({ date: p.date, mid: p.mid, band: [p.low, p.high] }));
-    }
-    return rows;
-  }, [history, forecast]);
-
+function RangeSummary({ d }: { d: Timeline }) {
+  const s = d.summary;
+  const up = s.period_return_pct >= 0;
+  const box = "rounded border border-slate-200 p-2 dark:border-slate-800";
+  const sub = "text-xs text-slate-700 dark:text-slate-300";
   return (
-    <div className="h-72 w-full" role="img" aria-label={`Price chart for ${history.symbol}${forecast ? " with forecast band" : ""}`}>
+    <dl className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4" aria-label={`Summary for the past ${rangeLong(d.range)}`}>
+      <div className={box}><dt className={sub}>Return over {rangeLong(d.range)}</dt>
+        <dd className={`font-semibold ${up ? "text-green-800 dark:text-green-300" : "text-red-700 dark:text-red-300"}`}><span aria-hidden="true">{up ? "▲ " : "▼ "}</span>{spct(s.period_return_pct)}</dd>
+        <dd className={sub}>{money(s.start_close)} → {money(s.end_close)}</dd></div>
+      <div className={box}><dt className={sub}>High</dt><dd className="font-semibold">{money(s.high)}</dd><dd className={sub}>{s.high_date}</dd></div>
+      <div className={box}><dt className={sub}>Low</dt><dd className="font-semibold">{money(s.low)}</dd><dd className={sub}>{s.low_date}</dd></div>
+      <div className={box}><dt className={sub}>Worst drop from a peak</dt><dd className="font-semibold">{spct(s.max_drawdown_pct)}</dd><dd className={sub}>within this range</dd></div>
+    </dl>
+  );
+}
+
+function Chart({ history, forecast, normalized }: { history: Timeline; forecast?: Forecast; normalized: boolean }) {
+  const data = useMemo(() => buildRows(history.points, forecast?.path, normalized), [history, forecast, normalized]);
+  const s = history.summary;
+  return (
+    <div className="h-72 w-full" role="img"
+      aria-label={`${normalized ? "Percent change" : "Price"} chart for ${history.symbol} over the past ${rangeLong(history.range)}${forecast ? ` with ${forecast.horizon_days}-day forecast and 80% interval` : ""}: ${spct(s.period_return_pct)} over the range, high ${money(s.high)}, low ${money(s.low)}. A table is available below.`}>
       <ResponsiveContainer>
         <ComposedChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid strokeOpacity={0.15} />
           <XAxis dataKey="date" tick={{ fontSize: 11 }} minTickGap={40} />
-          <YAxis domain={["auto", "auto"]} tick={{ fontSize: 11 }} width={48} />
-          <Tooltip formatter={(v) => (Array.isArray(v) ? v.map((n) => Number(n).toFixed(2)).join(" – ") : Number(v).toFixed(2))} />
+          <YAxis domain={["auto", "auto"]} tick={{ fontSize: 11 }} width={52} tickFormatter={(v) => (normalized ? `${Number(v).toFixed(0)}%` : `$${Number(v).toFixed(0)}`)} />
+          <Tooltip formatter={(v) => { const f = (n: unknown) => (normalized ? `${Number(n).toFixed(1)}%` : Number(n).toFixed(2)); return Array.isArray(v) ? v.map(f).join(" – ") : f(v); }} />
           <Area dataKey="band" name="80% interval" stroke="none" fill="#f59e0b" fillOpacity={0.25} isAnimationActive={false} />
           <Line dataKey="close" name="Close" stroke="#3b82f6" dot={false} strokeWidth={2} isAnimationActive={false} />
           <Line dataKey="mid" name="Forecast" stroke="#f59e0b" strokeDasharray="5 4" dot={false} strokeWidth={2} isAnimationActive={false} />
@@ -76,11 +86,13 @@ function Chart({ history, forecast }: { history: History; forecast?: Forecast })
 }
 
 export function StockPanel({ symbol }: { symbol: string }) {
-  const [range, setRange] = useState<(typeof RANGES)[number]>("6mo");
+  const [range, setRange] = useChartRange();
+  const normToggle = useId();
+  const [normalized, setNormalized] = useState(false);
   const [horizon, setHorizon] = useState(5);
   const sym = encodeURIComponent(symbol);
   const online = useOnline();
-  const hist = useApi<History>(`/api/history/${sym}?range=${range}`);
+  const hist = useApi<Timeline>(`/api/timeline/${sym}?range=${range}`);
   const fc = useApi<Forecast>(`/api/forecast/${sym}?horizon=${horizon}`, { cheap: false });
 
   const btn = (active: boolean) => `rounded px-2 py-1 text-xs font-medium ${active ? "bg-blue-700 text-white" : "bg-slate-200 text-slate-900 dark:bg-slate-800 dark:text-slate-100"}`;
@@ -89,7 +101,7 @@ export function StockPanel({ symbol }: { symbol: string }) {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-xl font-bold">{symbol}</h2>
-        <div className="flex gap-1" role="group" aria-label="Chart range">{RANGES.map((r) => (<button key={r} className={btn(r === range)} aria-pressed={r === range} onClick={() => setRange(r)}>{r}</button>))}</div>
+        <div className="flex flex-wrap gap-1" role="group" aria-label="History range shown on the chart">{CHART_RANGES.map((r) => (<button key={r.id} className={btn(r.id === range)} aria-pressed={r.id === range} aria-label={r.long} onClick={() => setRange(r.id)}>{r.label}</button>))}</div>
       </div>
 
       {hist.loading && !hist.data && <p role="status" className="text-sm text-slate-700 dark:text-slate-300">Loading prices…</p>}
@@ -98,13 +110,19 @@ export function StockPanel({ symbol }: { symbol: string }) {
         <>
           <OutdatedLabel fromSaved={hist.fromSaved} savedAt={hist.savedAt} stale={hist.data.stale} delayed={hist.data.is_delayed}
             asOf={hist.data.data_as_of} refreshing={hist.loading} onRetry={hist.retry} />
-          <Chart history={hist.data} forecast={fc.data} />
+          <RangeSummary d={hist.data} />
+          <label htmlFor={normToggle} className="flex items-center gap-2 text-sm">
+            <input id={normToggle} type="checkbox" checked={normalized} onChange={(e) => setNormalized(e.target.checked)} className="h-4 w-4" />
+            Show as % change from the start of the range (forecast included)
+          </label>
+          <Chart history={hist.data} forecast={fc.data} normalized={normalized} />
+          <p className="text-xs text-slate-700 dark:text-slate-300">
+            {hist.data.note} {hist.data.downsampled && `The chart shows ${hist.data.points.length} of ${hist.data.n_points_total} trading days (highs and lows kept); the summary uses all of them.`}
+          </p>
           <ChartTable history={hist.data} forecast={fc.data} />
           {fc.data && <ForecastNote />}
         </>
       )}
-
-      <PerformanceTimeline symbol={symbol} />
 
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <span id="horizon-label">Forecast horizon (trading days):</span>

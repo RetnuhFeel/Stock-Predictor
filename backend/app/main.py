@@ -327,7 +327,8 @@ def _downsample(close: pd.Series, max_points: int) -> pd.Series:
 
 @app.get("/api/timeline/{symbol}")
 def timeline(symbol: str, range: str = Query("5y"), provider: BaseProvider = Depends(get_provider)):
-    """Closing-price timeline over 1mo/6mo/1y/5y with period return, high and low (computed on the full data)."""
+    """History for the main chart: closes over 1mo/3mo/6mo/1y/2y/5y, downsampled, with period return, high, low and
+    worst drawdown computed on the full data. (/api/history keeps returning every bar with volume.)"""
     sym = normalize_symbol(symbol)
     if range not in config.TIMELINE_RANGES:
         raise InvalidRange(f"range must be one of {list(config.TIMELINE_RANGES)}")

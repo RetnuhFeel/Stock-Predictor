@@ -18,8 +18,6 @@ export type Quote = Freshness & {
   as_of: string;
 };
 
-export type HistoryPoint = { date: string; close: number; volume: number };
-export type History = Freshness & { symbol: string; range: string; points: HistoryPoint[] };
 
 export type Metrics = { rmse: number; mae: number; directional_accuracy: number | null };
 
@@ -250,7 +248,7 @@ export type Spikes = Freshness & {
   disclaimer: string;
 };
 
-export type TimelineRange = "1mo" | "6mo" | "1y" | "5y";
+export type TimelineRange = "1mo" | "3mo" | "6mo" | "1y" | "2y" | "5y";
 export type Timeline = Freshness & {
   symbol: string;
   range: TimelineRange;
