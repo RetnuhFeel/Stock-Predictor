@@ -41,3 +41,9 @@ CLIENT_ERROR_RATE_PER_MIN = int(os.getenv("CLIENT_ERROR_RATE_PER_MIN", "10"))
 CLIENT_ERROR_MAX_BYTES = 4096
 # Optional Sentry (backend only): requires `pip install sentry-sdk`; not installed by default.
 SENTRY_DSN = os.getenv("SENTRY_DSN", "")
+
+# Public model report card: a fixed, small set of well-known tickers at a fixed horizon (bounded cost).
+REPORT_SYMBOLS = ["SPY", "AAPL", "MSFT", "NVDA", "TSLA"]
+REPORT_HORIZON = 5
+MODEL_REPORT_TTL_S = int(os.getenv("MODEL_REPORT_TTL_S", "21600"))  # 6 h
+MODEL_REPORT_RATE_PER_MIN = int(os.getenv("MODEL_REPORT_RATE_PER_MIN", "6"))  # per client, stricter than the default

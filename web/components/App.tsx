@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useState } from "react";
 import { AlertsChecker } from "./AlertsChecker";
 import { AlertsPanel } from "./AlertsPanel";
@@ -30,7 +31,10 @@ export function App() {
           <h1 className="text-2xl font-bold">
             <span aria-hidden="true">📈 </span>Stock Predictor <span className="text-xs font-normal text-slate-600 dark:text-slate-300">experimental</span>
           </h1>
-          <ThemeToggle />
+          <nav aria-label="Site" className="flex items-center gap-3 text-sm">
+            <Link href="/model" className="text-blue-800 underline dark:text-blue-300">Model report</Link>
+            <ThemeToggle />
+          </nav>
         </header>
         <div className="mb-4 space-y-2">
           <OfflineBanner />

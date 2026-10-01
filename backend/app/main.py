@@ -87,6 +87,8 @@ async def observe_and_limit(request: Request, call_next):
         retry = None
         if path.startswith("/api/") and config.RATE_LIMIT_PER_MIN > 0:
             retry = _limited("api", _client_id(request), config.RATE_LIMIT_PER_MIN, time.monotonic())
+        if retry is None and path == "/api/model-report" and config.RATE_LIMIT_PER_MIN > 0:
+            retry = _limited("report", _client_id(request), config.MODEL_REPORT_RATE_PER_MIN, time.monotonic())
         if retry is not None:
             request.state.error_code = "RATE_LIMITED"
             response: Response = JSONResponse(
@@ -291,10 +293,7 @@ def history(symbol: str, range: str = Query("6mo"), provider: BaseProvider = Dep
     return {"symbol": sym, "range": range, "points": pts, **_freshness(df, got)}
 
 
-@app.get("/api/forecast/{symbol}")
-def forecast_endpoint(symbol: str, horizon: int = Query(5, ge=1, le=config.MAX_HORIZON),
-                      provider: BaseProvider = Depends(get_provider)):
-    sym = normalize_symbol(symbol)
+def _forecast_for(provider: BaseProvider, sym: str, horizon: int) -> tuple[dict, pd.DataFrame, Fetched]:
     hist = _history(provider, sym, "5y")  # served from (stale) cache if the provider is failing
     df = hist.value
 
@@ -303,5 +302,75 @@ def forecast_endpoint(symbol: str, horizon: int = Query(5, ge=1, le=config.MAX_H
 
     # keyed by last bar so a new day's data invalidates the cached forecast
     key = ("fc", provider.name, sym, horizon, df.index[-1].date())
-    result = cache.fetch(key, config.FORECAST_TTL_S, build).value
+    return cache.fetch(key, config.FORECAST_TTL_S, build).value, df, hist
+
+
+@app.get("/api/forecast/{symbol}")
+def forecast_endpoint(symbol: str, horizon: int = Query(5, ge=1, le=config.MAX_HORIZON),
+                      provider: BaseProvider = Depends(get_provider)):
+    sym = normalize_symbol(symbol)
+    result, df, hist = _forecast_for(provider, sym, horizon)
     return {**result, **_freshness(df, hist), "disclaimer": config.DISCLAIMER}
+
+
+def _verdict(bt: dict) -> str:
+    """Same rule as the web UI's plain-language verdict."""
+    if bt["beats_baseline"]:
+        return "better"
+    ci = bt.get("skill_ci_90")
+    if bt["skill_vs_baseline"] > 0 and ci and ci[0] <= 0:
+        return "inconclusive"
+    return "not_better"
+
+
+_report_lock = threading.Lock()  # one report build at a time: bounds CPU even under a burst of requests
+
+
+@app.get("/api/model-report")
+def model_report(provider: BaseProvider = Depends(get_provider)):
+    """Backtest 'report card' for a small fixed set of tickers at a fixed horizon.
+
+    Cost is bounded: the symbol list and horizon are fixed (not user input), results are cached
+    (MODEL_REPORT_TTL_S, and each forecast shares the normal forecast cache), builds are serialised, and the
+    endpoint has its own stricter rate limit. A symbol that fails is listed under ``failed``; the rest are shown.
+    """
+    horizon = config.REPORT_HORIZON
+
+    def build():
+        rows, failed, as_of, fetched, stale_in = [], [], [], [], []
+        first_error: ApiError | None = None
+        for sym in config.REPORT_SYMBOLS:
+            try:
+                result, df, hist = _forecast_for(provider, sym, horizon)
+            except ApiError as exc:
+                first_error = first_error or exc
+                failed.append({"symbol": sym, "code": exc.code, "message": exc.message})
+                continue
+            bt = result["backtest"]
+            as_of.append(df.index[-1].date())
+            fetched.append(hist.fetched_at)
+            stale_in.append(hist.stale)
+            rows.append({
+                "symbol": sym, "verdict": _verdict(bt), "skill_vs_baseline": bt["skill_vs_baseline"],
+                "skill_ci_90": bt["skill_ci_90"], "model_rmse": bt["model"]["rmse"],
+                "baseline_rmse": bt["naive_baseline"]["rmse"], "hit_rate": bt["model"]["directional_accuracy"],
+                "up_rate": bt["up_rate"], "n_test_points": bt["n_test_points"],
+                "n_independent_tests": bt["n_independent_tests"], "small_sample": bt["small_sample"],
+                "data_as_of": df.index[-1].date().isoformat(),
+            })
+        if not rows:
+            raise first_error or InvalidRequest("No report data available.")
+        return {"rows": rows, "failed": failed, "as_of": min(as_of), "fetched_at": min(fetched), "stale": any(stale_in)}
+
+    with _report_lock:
+        got = cache.fetch(("report", provider.name, config.REPORT_HORIZON), config.MODEL_REPORT_TTL_S, build,
+                          stale_max_age=config.STALE_MAX_AGE_S)
+    v = got.value
+    return {"horizon_days": horizon, "rows": v["rows"], "failed": v["failed"],
+            "method": (f"Expanding-window walk-forward, 6 folds, {horizon}-day embargo, "
+                       "vs. a 'price stays flat' baseline."),
+            "summary": {"better": sum(r["verdict"] == "better" for r in v["rows"]),
+                        "inconclusive": sum(r["verdict"] == "inconclusive" for r in v["rows"]),
+                        "not_better": sum(r["verdict"] == "not_better" for r in v["rows"]),
+                        "total": len(v["rows"])},
+            **describe(v["as_of"], v["fetched_at"], got.stale or v["stale"]), "disclaimer": config.DISCLAIMER}
