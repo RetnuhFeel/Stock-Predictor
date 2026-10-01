@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import Link from "next/link";
+import { ModelExplorer } from "@/components/ModelExplorer";
 import { ModelReport } from "@/components/ModelReport";
 import { Page } from "@/components/Prose";
 
@@ -34,6 +36,10 @@ export default function Model() {
         <li>A good past result is not a promise: markets change.</li>
       </ul>
       <ModelReport />
+      <ModelExplorer />
+      <p>
+        Backtests look at the past. For results recorded <em>before</em> the outcome was known, see the <Link href="/track-record" className="text-blue-800 underline dark:text-blue-300">live track record</Link>.
+      </p>
     </Page>
   );
 }

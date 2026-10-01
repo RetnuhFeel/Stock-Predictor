@@ -53,11 +53,20 @@ def fake():
 
 
 @pytest.fixture
-def client(fake, monkeypatch):
+def store(tmp_path):
+    from app.storage import PredictionStore
+    st = PredictionStore(f"sqlite:///{tmp_path / 'log.db'}")
+    yield st
+    st.close()
+
+
+@pytest.fixture
+def client(fake, store, monkeypatch):
     monkeypatch.setattr(config, "RATE_LIMIT_PER_MIN", 1000)
     main.cache.clear()
     main._hits.clear()
     main.stats.reset()
     main.app.dependency_overrides[main.get_provider] = lambda: fake
+    main.app.dependency_overrides[main.get_store] = lambda: store
     yield TestClient(main.app)
     main.app.dependency_overrides.clear()

@@ -91,3 +91,118 @@ export type ModelReport = Freshness & {
   summary: { better: number; inconclusive: number; not_better: number; total: number };
   disclaimer: string;
 };
+
+export type Verdict = "better" | "inconclusive" | "not_better";
+export type ModelRow = {
+  model: string;
+  label: string;
+  description: string;
+  rmse: number;
+  mae: number;
+  hit_rate: number | null;
+  skill_vs_naive: number;
+  skill_ci_90: [number, number];
+  beats_naive: boolean;
+  verdict: Verdict | "baseline";
+};
+export type ModelComparison = Freshness & {
+  symbol: string;
+  horizon_days: number;
+  embargo_days: number;
+  n_folds: number;
+  n_test_points: number;
+  n_independent_tests: number;
+  small_sample: boolean;
+  up_rate: number;
+  method: string;
+  models: ModelRow[];
+  any_beats_naive: boolean;
+  n_candidates: number;
+  note: string;
+  disclaimer: string;
+};
+
+export type VolModelRow = {
+  model: string;
+  label: string;
+  description: string;
+  typical_error_pct: number;
+  skill_vs_naive: number;
+  skill_ci_90: [number, number];
+  beats_naive: boolean;
+  verdict: Verdict | "baseline";
+  forecast_daily_vol: number;
+  annualized_vol: number;
+};
+export type Volatility = Freshness & {
+  symbol: string;
+  horizon_days: number;
+  last_close: number;
+  headline_model: string;
+  forecast_daily_vol: number;
+  annualized_vol: number;
+  horizon_vol: number;
+  risk_range: { one_sigma_pct: number; low: number; high: number; nominal_coverage: number; backtest_coverage: number };
+  verdict: Verdict;
+  skill_vs_naive: number;
+  skill_ci_90: [number, number];
+  models: VolModelRow[];
+  n_test_points: number;
+  n_independent_tests: number;
+  small_sample: boolean;
+  embargo_days: number;
+  method: string;
+  notes: string[];
+  disclaimer: string;
+};
+
+export type LogRow = {
+  id: number;
+  symbol: string;
+  horizon_days: number;
+  made_at: string;
+  base_date: string;
+  base_close: number;
+  predicted_return: number;
+  interval_low: number;
+  interval_high: number;
+  backtest_skill: number | null;
+  model: string;
+  status: "pending" | "resolved";
+  resolved_at: string | null;
+  realized_date: string | null;
+  realized_close: number | null;
+  realized_return: number | null;
+  entry_hash: string;
+  in_interval?: boolean;
+  direction_correct?: boolean;
+};
+export type Scorecard = {
+  verdict: "no_data" | "too_early" | Verdict;
+  n_resolved: number;
+  n_pending: number;
+  n_dates: number;
+  n_independent: number;
+  min_for_verdict: number;
+  horizon_days?: number;
+  skill_vs_naive?: number;
+  skill_ci_90?: [number, number] | null;
+  model_rmse?: number;
+  naive_rmse?: number;
+  hit_rate?: number;
+  up_rate?: number;
+  interval_coverage?: number;
+  interval_nominal?: number;
+};
+export type PredictionLog = Freshness & {
+  items: LogRow[];
+  total: number;
+  limit: number;
+  offset: number;
+  scorecard: Scorecard;
+  chain_ok: boolean;
+  symbols: string[];
+  horizon_days: number;
+  storage: { backend: string; durable: boolean };
+  disclaimer: string;
+};

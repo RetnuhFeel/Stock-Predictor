@@ -47,3 +47,19 @@ REPORT_SYMBOLS = ["SPY", "AAPL", "MSFT", "NVDA", "TSLA"]
 REPORT_HORIZON = 5
 MODEL_REPORT_TTL_S = int(os.getenv("MODEL_REPORT_TTL_S", "21600"))  # 6 h
 MODEL_REPORT_RATE_PER_MIN = int(os.getenv("MODEL_REPORT_RATE_PER_MIN", "6"))  # per client, stricter than the default
+
+# --- model comparison / volatility (bounded compute) ---
+HEAVY_RATE_PER_MIN = int(os.getenv("HEAVY_RATE_PER_MIN", "20"))  # per client, for compare-models and volatility
+MODELS_TTL_S = int(os.getenv("MODELS_TTL_S", "3600"))
+
+# --- live prediction log ---
+# Fixed allowlist, logged by a scheduled job only (never per user request), so storage is bounded and nothing
+# about any visitor is recorded.
+LOG_SYMBOLS = ["SPY", "AAPL", "MSFT", "NVDA", "TSLA"]
+LOG_HORIZON = 5
+# Protects POST /api/_tasks/run-prediction-log. Unset/empty = endpoint disabled (404).
+LOG_TASK_TOKEN = os.getenv("LOG_TASK_TOKEN", "")
+# SQLite file by default; set DATABASE_URL (e.g. a Postgres URL) for storage that survives redeploys.
+# On Render's free tier the container disk is EPHEMERAL: a SQLite log is lost on every redeploy/restart.
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+PREDICTION_LOG_TTL_S = int(os.getenv("PREDICTION_LOG_TTL_S", "120"))

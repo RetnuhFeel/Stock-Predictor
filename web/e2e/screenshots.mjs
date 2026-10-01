@@ -34,7 +34,7 @@ for (const scheme of ["light", "dark"]) {
     await page.waitForTimeout(600);
     await shot(page, "compare-light.png");
     await page.goto(`${WEB}/model`);
-    await page.getByRole("table").waitFor({ timeout: 120000 });
+    await page.getByRole("table").first().waitFor({ timeout: 120000 });
     await page.waitForTimeout(400);
     await shot(page, "model-report-light.png", { fullPage: true });
   }
@@ -71,7 +71,7 @@ for (const scheme of ["light", "dark"]) {
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.getByRole("button", { name: "Compare", exact: true }).click();
   await page.getByRole("table").first().waitFor({ timeout: 120000 }); await page.waitForTimeout(600); await frame(3.5);
-  await page.goto(`${WEB}/model`); await page.getByRole("table").waitFor({ timeout: 120000 }); await page.waitForTimeout(400); await frame(4);
+  await page.goto(`${WEB}/model`); await page.locator("section[aria-labelledby=report-title] table").waitFor({ timeout: 120000 }); await page.waitForTimeout(400); await frame(4);
   await c.close();
 
   const list = frames.map(([f, s]) => `file '${f}'\nduration ${s}`).join("\n") + `\nfile '${frames.at(-1)[0]}'\n`;

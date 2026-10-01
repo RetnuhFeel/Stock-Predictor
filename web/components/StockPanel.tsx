@@ -4,8 +4,10 @@ import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip,
 import { useApi } from "@/lib/api";
 import { BacktestSummary } from "./BacktestSummary";
 import { useOnline } from "@/lib/online";
+import { ModelComparison } from "./ModelComparison";
 import { NewsPanel } from "./NewsPanel";
 import { ErrorNotice, OutdatedLabel } from "./Notices";
+import { VolatilityPanel } from "./VolatilityPanel";
 import type { Forecast, History } from "@/lib/types";
 
 const RANGES = ["1mo", "3mo", "6mo", "1y", "2y"] as const;
@@ -128,6 +130,8 @@ export function StockPanel({ symbol }: { symbol: string }) {
           <BacktestSummary backtest={fc.data.backtest} horizon={fc.data.horizon_days} />
         </>
       )}
+      <VolatilityPanel symbol={symbol} horizon={horizon} />
+      <ModelComparison symbol={symbol} horizon={horizon} />
       <NewsPanel symbol={symbol} />
     </div>
   );

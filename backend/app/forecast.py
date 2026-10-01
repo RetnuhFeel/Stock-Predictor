@@ -69,17 +69,27 @@ class WalkForward:
     n_folds: int
 
 
-def walk_forward(X: pd.DataFrame, y: pd.Series, horizon: int, n_folds: int = 6) -> WalkForward:
-    """Expanding-window walk-forward: train on [0, t - horizon), predict the block [t, t + step)."""
-    n = len(X)
+def fold_schedule(n: int, horizon: int, n_folds: int = 6) -> list[tuple[int, slice]]:
+    """Expanding-window folds as (train_end, test_slice). Rows < train_end are used for training.
+
+    The embargo: a row's label looks ``horizon`` days into the future, so training stops ``horizon``
+    rows before the test block starts and no training label overlaps the test period.
+    """
     start = max(int(n * 0.5), 120)
     step = max((n - start) // n_folds, 1)
-    trues, preds, folds = [], [], 0
+    folds = []
     for t in range(start, n, step):
-        train_end = t - horizon  # embargo: labels of rows >= train_end look into the test block
+        train_end = t - horizon
         if train_end < 60:
             continue
-        test = slice(t, min(t + step, n))
+        folds.append((train_end, slice(t, min(t + step, n))))
+    return folds
+
+
+def walk_forward(X: pd.DataFrame, y: pd.Series, horizon: int, n_folds: int = 6) -> WalkForward:
+    """Expanding-window walk-forward: train on [0, t - horizon), predict the block [t, t + step)."""
+    trues, preds, folds = [], [], 0
+    for train_end, test in fold_schedule(len(X), horizon, n_folds):
         m = _model().fit(X.iloc[:train_end], y.iloc[:train_end])
         preds.append(m.predict(X.iloc[test]))
         trues.append(y.iloc[test].to_numpy())
@@ -96,6 +106,22 @@ def _metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
         "mae": float(np.mean(np.abs(err))),
         "directional_accuracy": float(np.mean(np.sign(y_pred) == np.sign(y_true))) if np.any(y_pred) else None,
     }
+
+
+def skill_ci_sq(err_model_sq: np.ndarray, err_base_sq: np.ndarray, block: int,
+                level: float = 0.90) -> tuple[float, float]:
+    """Moving-block bootstrap CI for 1 - RMSE_model / RMSE_baseline, from per-test squared errors."""
+    rng = np.random.default_rng(SEED)
+    n = len(err_model_sq)
+    block = max(min(block, n), 1)
+    starts_max = n - block + 1
+    n_blocks = int(np.ceil(n / block))
+    skills = np.empty(N_BOOT)
+    for i in range(N_BOOT):
+        idx = (rng.integers(0, starts_max, n_blocks)[:, None] + np.arange(block)).ravel()[:n]
+        skills[i] = 1 - np.sqrt(err_model_sq[idx].mean()) / np.sqrt(err_base_sq[idx].mean())
+    lo, hi = np.quantile(skills, [(1 - level) / 2, 1 - (1 - level) / 2])
+    return float(lo), float(hi)
 
 
 def skill_ci(y_true: np.ndarray, y_pred: np.ndarray, block: int, level: float = 0.90) -> tuple[float, float]:
