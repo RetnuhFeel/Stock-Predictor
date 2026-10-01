@@ -18,8 +18,8 @@ HISTORY_TTL_S = int(os.getenv("HISTORY_TTL_S", "900"))
 FORECAST_TTL_S = int(os.getenv("FORECAST_TTL_S", "3600"))
 
 RANGES = {"1mo": "1mo", "3mo": "3mo", "6mo": "6mo", "1y": "1y", "2y": "2y", "5y": "5y"}
-# Performance timeline: windows sliced from the single cached 5y download; long ranges are downsampled for payload size
-TIMELINE_RANGES = {"1mo": 1, "6mo": 6, "1y": 12, "5y": 60}  # months
+# Chart history (GET /api/timeline): windows sliced from the single cached 5y download, downsampled for payload size
+TIMELINE_RANGES = {"1mo": 1, "3mo": 3, "6mo": 6, "1y": 12, "2y": 24, "5y": 60}  # months
 TIMELINE_MAX_POINTS = 400
 MAX_HORIZON = 256  # trading days (~1 year); the UI offers 5/10/20/60/120/180/256
 

@@ -43,18 +43,21 @@ const shot = (page, name, opts = {}) => page.screenshot({ path: `${OUT}/${name}`
   await shot(mp, "mobile-lists.png");
   await m.close();
 }
-// Performance timeline (5Y) + 256-day long-horizon warning
+// Chart with history range selector (5Y, with forecast overlay) + 256-day long-horizon warning
 {
-  const c = await ctx({ colorScheme: "light", viewport: { width: 1280, height: 900 } });
+  const c = await ctx({ colorScheme: "light", viewport: { width: 1280, height: 1000 } });
   const page = await c.newPage();
   await page.goto(WEB); await accept(page); await forecastReady(page);
   await page.getByRole("combobox", { name: "List", exact: true }).selectOption("default");
-  await page.getByRole("heading", { name: /Performance timeline/ }).waitFor({ timeout: 120000 });
-  await page.getByText("Period return").waitFor({ timeout: 120000 });
+  await page.getByText(/Experimental \d+-day estimate/).waitFor({ timeout: 120000 });
+  const grp = page.getByRole("group", { name: "History range shown on the chart" });
+  await grp.getByRole("button", { name: "2 years", exact: true }).click();
+  await page.getByText(/Return over 2 years/).waitFor({ timeout: 120000 });
   await page.waitForTimeout(800);
-  const tl = page.locator("section[aria-labelledby=timeline-title]");
-  await tl.scrollIntoViewIfNeeded(); await page.waitForTimeout(400);
-  await tl.screenshot({ path: `${OUT}/timeline-5y-light.png` });
+  const top = page.locator("h2", { hasText: /^[A-Z.]+$/ }).first();
+  await top.scrollIntoViewIfNeeded(); await page.waitForTimeout(300);
+  const box = await page.locator("main").boundingBox();
+  await page.screenshot({ path: `${OUT}/chart-range-light.png`, clip: { x: box.x, y: Math.max(box.y, 0), width: box.width, height: 640 } });
   await page.getByRole("button", { name: "256d", exact: true }).click();
   await page.getByText(/Long-horizon forecasts \(256 trading days/).waitFor({ timeout: 120000 });
   await page.getByText(/Experimental 256-day estimate/).waitFor({ timeout: 120000 });
@@ -66,11 +69,12 @@ const shot = (page, name, opts = {}) => page.screenshot({ path: `${OUT}/${name}`
   const mp = await m.newPage();
   await mp.goto(WEB); await accept(mp);
   await mp.getByRole("combobox", { name: "List", exact: true }).selectOption("default");
-  await mp.getByText("Period return").waitFor({ timeout: 120000 });
+  await mp.getByText(/Experimental \d+-day estimate/).waitFor({ timeout: 120000 });
+  await mp.getByText(/Return over \d+ (months?|years?)/).waitFor({ timeout: 120000 });
   await mp.waitForTimeout(800);
-  const mt = mp.locator("section[aria-labelledby=timeline-title]");
-  await mt.scrollIntoViewIfNeeded(); await mp.waitForTimeout(400);
-  await mt.screenshot({ path: `${OUT}/mobile-timeline-dark.png` });
+  const mm = mp.locator("main");
+  const mb = await mm.boundingBox();
+  await mp.screenshot({ path: `${OUT}/mobile-chart-range-dark.png`, fullPage: true, clip: { x: 0, y: mb.y, width: 390, height: 760 } });
   await m.close();
 }
 if (process.env.ONLY === "timeline") { await browser.close(); console.log("done (timeline only)"); process.exit(0); }

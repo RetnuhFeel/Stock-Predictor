@@ -53,7 +53,7 @@ async function mockApi(context) {
       return json({ days: 3, limit: 5, items: [["AAPL", "Apple Inc.", 6.1], ["NVDA", "NVIDIA Corporation", 5.2], ["AMD", "Advanced Micro Devices, Inc.", 4.4], ["META", "Meta Platforms, Inc.", 3.9], ["TSLA", "Tesla, Inc.", 3.1]]
         .map(([symbol, name, r], i) => ({ rank: i + 1, symbol, name, return_percent: r, last_close: 120 + i, as_of: "2026-09-30" })), universe_size: 106, evaluated: 104, method: "close-to-close", note: "A plain momentum screen, not a recommendation or a prediction.", disclaimer: "Educational only.", ...fresh }); }
     if (p.startsWith("/api/timeline/")) { if (globalThis.__timelineFail) return json({ error: { code: "DATA_UNAVAILABLE", message: "x", retryable: true } }, 503);
-      const rg = u.searchParams.get("range") || "5y"; const n = { "1mo": 21, "6mo": 126, "1y": 252, "5y": 400 }[rg]; const pts = Array.from({ length: Math.min(n, 120) }, (_, i) => ({ date: `2026-${String(1 + Math.floor(i / 28)).padStart(2, "0")}-${String(1 + (i % 28)).padStart(2, "0")}`, close: 100 + i * 0.5 + Math.sin(i / 4) * 4 }));
+      const rg = u.searchParams.get("range") || "6mo"; const n = { "1mo": 21, "3mo": 63, "6mo": 126, "1y": 252, "2y": 504, "5y": 400 }[rg]; const pts = Array.from({ length: Math.min(n, 120) }, (_, i) => ({ date: `2026-${String(1 + Math.floor(i / 28)).padStart(2, "0")}-${String(1 + (i % 28)).padStart(2, "0")}`, close: 100 + i * 0.5 + Math.sin(i / 4) * 4 }));
       return json({ symbol: p.split("/").pop(), range: rg, points: pts, n_points_total: n, downsampled: n > 120, summary: { start_date: pts[0].date, end_date: pts.at(-1).date, start_close: pts[0].close, end_close: pts.at(-1).close, period_return_pct: 59.5, high: 163.9, high_date: "2026-05-02", low: 96.2, low_date: "2026-01-03", max_drawdown_pct: -12.3 },
         note: "Adjusted closing prices. Past performance does not predict future results.", disclaimer: "Educational only.", ...fresh }); }
     if (p.startsWith("/api/spikes/")) { globalThis.__spikeCalls = (globalThis.__spikeCalls ?? 0) + 1; if (globalThis.__spikeFail) return json({ error: { code: "INSUFFICIENT_DATA", message: "Need at least 250 daily bars, got 100", retryable: false } }, 422);
@@ -108,20 +108,32 @@ for (const scheme of ["light", "dark"]) {
   await page.getByText(/No model clearly beat/).first().waitFor();
   await page.waitForLoadState("networkidle");
   await axe(page, `[${scheme}] stock view with volatility + model comparison`);
-  // 5-year performance timeline: default 5Y, summary, range switch, normalized view, table, error state
-  await page.getByRole("heading", { name: /Performance timeline/ }).waitFor({ timeout: 15000 });
-  ok((await page.getByRole("button", { name: "5 years", exact: true }).getAttribute("aria-pressed")) === "true", `[${scheme}] timeline defaults to 5Y`);
-  ok(await page.getByText("Period return").isVisible() && await page.getByText("Worst drop from a peak").isVisible(), `[${scheme}] timeline shows return/high/low/drawdown summary`);
+  // history range on the main chart: six options, default 6M, summary, range switch, % view, table, error state, no separate timeline section
+  ok((await page.getByRole("heading", { name: /Performance timeline/ }).count()) === 0, `[${scheme}] no separate Performance timeline section`);
+  const rangeGroup = page.getByRole("group", { name: "History range shown on the chart" });
+  const labels = await rangeGroup.getByRole("button").allInnerTexts();
+  ok(JSON.stringify(labels) === JSON.stringify(["1M", "3M", "6M", "1Y", "2Y", "5Y"]), `[${scheme}] chart offers 1M, 3M, 6M, 1Y, 2Y, 5Y (${labels.join(" ")})`);
+  ok((await rangeGroup.getByRole("button", { name: "6 months", exact: true }).getAttribute("aria-pressed")) === "true", `[${scheme}] chart range defaults to 6M`);
+  ok(await page.getByText("Worst drop from a peak").isVisible() && await page.getByText(/Return over 6 months/).isVisible(), `[${scheme}] range summary (return/high/low/drawdown) shown on the chart`);
+  await rangeGroup.getByRole("button", { name: "5 years", exact: true }).click();
+  await page.getByText(/Return over 5 years/).waitFor({ timeout: 15000 });
   ok(await page.getByText(/The chart shows 120 of 400 trading days/).isVisible(), `[${scheme}] downsampling is disclosed`);
-  await page.getByRole("button", { name: "1 month", exact: true }).click();
-  await page.getByRole("heading", { name: /past 1 month/ }).waitFor({ timeout: 15000 });
-  ok((await page.getByRole("button", { name: "1 month", exact: true }).getAttribute("aria-pressed")) === "true", `[${scheme}] timeline range switch (1M)`);
-  await page.getByRole("button", { name: "5 years", exact: true }).click();
-  await page.getByLabel("Show as % change from the start of the period").check();
-  await page.locator("section[aria-labelledby=timeline-title]").getByText("View timeline data as a table").click();
-  ok((await page.locator("section[aria-labelledby=timeline-title] table tbody tr").count()) === 120, `[${scheme}] timeline table alternative`);
+  ok(await page.getByText(/Experimental \d+-day estimate/).isVisible(), `[${scheme}] forecast stays visible when the range changes`);
+  ok((await rangeGroup.getByRole("button", { name: "5 years", exact: true }).getAttribute("aria-pressed")) === "true", `[${scheme}] range switch (5Y)`);
+  await page.reload();
+  await page.getByRole("group", { name: "History range shown on the chart" }).waitFor({ timeout: 30000 });
+  ok((await page.getByRole("group", { name: "History range shown on the chart" }).getByRole("button", { name: "5 years", exact: true }).getAttribute("aria-pressed")) === "true", `[${scheme}] chosen range is remembered after reload`);
+  await page.evaluate(() => localStorage.setItem("chart.range.v1", "{corrupt"));
+  await page.reload();
+  await page.getByRole("group", { name: "History range shown on the chart" }).waitFor({ timeout: 30000 });
+  ok((await page.getByRole("group", { name: "History range shown on the chart" }).getByRole("button", { name: "6 months", exact: true }).getAttribute("aria-pressed")) === "true", `[${scheme}] corrupt saved range falls back to 6M`);
+  await page.getByLabel(/Show as % change from the start of the range/).check();
+  await page.getByText("View chart data as a table").click();
+  const rows = await page.locator("details table tbody tr").count();
+  ok(rows >= 120, `[${scheme}] chart table lists history and forecast rows (${rows})`);
   await page.waitForLoadState("networkidle");
-  await axe(page, `[${scheme}] performance timeline`);
+  await axe(page, `[${scheme}] chart with range selector, % view and table open`);
+  await page.getByLabel(/Show as % change from the start of the range/).uncheck();
   // long-horizon warning and 256d option
   for (const h of ["5d", "10d", "20d", "60d", "120d", "180d", "256d"]) ok((await page.getByRole("button", { name: h, exact: true }).count()) === 1, `[${scheme}] horizon option ${h}`);
   await page.getByRole("button", { name: "256d", exact: true }).click();
@@ -132,10 +144,12 @@ for (const scheme of ["light", "dark"]) {
   await page.getByText("(10-trading-day forecasts)").waitFor({ timeout: 15000 });
   globalThis.__timelineFail = true;
   await page.evaluate(() => Object.keys(localStorage).filter((k) => k.includes("timeline")).forEach((k) => localStorage.removeItem(k)));
-  await page.getByRole("button", { name: "1 year", exact: true }).click();
-  await page.locator("section[aria-labelledby=timeline-title]").getByRole("button", { name: /retry|try again/i }).first().waitFor({ timeout: 20000 });
-  ok(true, `[${scheme}] timeline error state offers retry`);
+  await page.getByRole("group", { name: "History range shown on the chart" }).getByRole("button", { name: "1 year", exact: true }).click();
+  await page.getByText("Price history").first().waitFor({ timeout: 20000 });
+  await page.getByRole("button", { name: /retry|try again/i }).first().waitFor({ timeout: 20000 });
+  ok(true, `[${scheme}] chart history error state offers retry`);
   globalThis.__timelineFail = false;
+  await page.getByRole("button", { name: "1 year", exact: true }).click().catch(() => {});
   // experimental spike scenario: off by default (nothing fetched), toggle on, badge + simulated-not-predicted text, table, error state
   ok(await page.getByText("Experimental", { exact: true }).first().isVisible(), `[${scheme}] spike panel carries an Experimental badge`);
   ok(!(await page.getByRole("checkbox", { name: "Show spike scenario" }).isChecked()) && !globalThis.__spikeCalls, `[${scheme}] spike scenario is off by default and not fetched`);

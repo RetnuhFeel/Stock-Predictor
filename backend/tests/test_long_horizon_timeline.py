@@ -85,10 +85,12 @@ def test_timeline_default_5y_summary_and_freshness(client):
 
 def test_timeline_ranges_and_validation_and_cache(client, fake):
     sizes = {}
-    for rg in ("1mo", "6mo", "1y", "5y"):
+    for rg in ("1mo", "3mo", "6mo", "1y", "2y", "5y"):
         j = client.get(f"/api/timeline/AAPL?range={rg}").json()
+        assert j["range"] == rg
         sizes[rg] = j["n_points_total"]
-    assert sizes["1mo"] < sizes["6mo"] < sizes["1y"] < sizes["5y"]
+    assert sizes["1mo"] < sizes["3mo"] < sizes["6mo"] < sizes["1y"] < sizes["2y"] < sizes["5y"]
+    assert list(config.TIMELINE_RANGES) == ["1mo", "3mo", "6mo", "1y", "2y", "5y"]
     assert fake.calls == 1  # all windows are sliced from one cached 5y download
     small = client.get("/api/timeline/AAPL?range=1mo").json()
     assert small["downsampled"] is False and len(small["points"]) == small["n_points_total"]
@@ -125,3 +127,27 @@ def test_too_few_independent_periods_can_never_say_better():
     assert forecast_volatility(close, 256)["verdict"] != "better"
     five = forecast(close, 5)["backtest"]
     assert five["too_few_independent"] is False  # the logged 5-day horizon is unaffected
+
+
+def test_history_endpoint_still_accepts_every_chart_range_and_keeps_volume(client):
+    # backward compatible: /api/history is unchanged (all bars, with volume) for every range the chart offers
+    for rg in ("1mo", "3mo", "6mo", "1y", "2y", "5y"):
+        r = client.get(f"/api/history/AAPL?range={rg}")
+        assert r.status_code == 200 and "volume" in r.json()["points"][0]
+    assert client.get("/api/history/AAPL?range=7y").json()["error"]["code"] == "INVALID_RANGE"
+
+
+def test_timeline_window_matches_range_and_summary_covers_full_window(client):
+    for rg, months in (("3mo", 3), ("2y", 24)):
+        b = client.get(f"/api/timeline/AAPL?range={rg}").json()
+        import pandas as pd
+        span = pd.Timestamp(b["summary"]["end_date"]) - pd.Timestamp(b["summary"]["start_date"])
+        assert abs(span.days - months * 30.4) < 8
+        closes = [p["close"] for p in b["points"]]
+        assert min(closes) == b["summary"]["low"] and max(closes) == b["summary"]["high"]
+
+
+def test_timeline_unknown_range_is_invalid_range(client):
+    for bad in ("max", "10y", "ytd", "", "6MO"):
+        r = client.get(f"/api/timeline/AAPL?range={bad}")
+        assert r.status_code == 400 and r.json()["error"]["code"] == "INVALID_RANGE"
