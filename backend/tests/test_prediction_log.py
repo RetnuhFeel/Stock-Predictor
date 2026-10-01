@@ -210,3 +210,129 @@ def test_public_log_marks_outcomes(client, store):
     main.cache.clear()
     item = client.get("/api/prediction-log").json()["items"][0]
     assert item["status"] == "resolved" and item["in_interval"] is True and item["direction_correct"] is True
+
+
+# ---------- storage error diagnostics (no credentials in logs) ----------
+PG_URL = "postgresql://neon_user:s3cr%40t-P4ss@ep-cool-123.us-east-2.aws.neon.tech/neondb?sslmode=require"
+
+
+def _records(caplog):
+    return [r for r in caplog.records if r.getMessage() == "storage_error"]
+
+
+def _dump(caplog):
+    return " ".join(r.getMessage() + repr(getattr(r, "ctx", {})) + (r.exc_text or "") for r in caplog.records)
+
+
+def test_redact_removes_password_user_and_url():
+    from app.storage import redact
+    secrets = [PG_URL, "s3cr%40t-P4ss", "s3cr@t-P4ss", "neon_user"]
+    msgs = [
+        'connection failed: password authentication failed for user "neon_user"',
+        f"could not connect using {PG_URL}",
+        "postgresql+psycopg://neon_user:s3cr@t-P4ss@ep-cool-123.us-east-2.aws.neon.tech/neondb refused",
+        "conninfo: host=h user=u password=s3cr@t-P4ss dbname=x",
+    ]
+    for m in msgs:
+        out = redact(m, secrets)
+        for bad in ("s3cr", "P4ss", "neon_user", "neondb?sslmode"):
+            assert bad not in out, (m, out)
+    assert "[redacted]" in redact(msgs[3], secrets)
+    assert len(redact("x" * 5000, [])) == 300
+
+
+def test_password_in_exception_message_is_not_logged(monkeypatch, caplog):
+    import logging
+
+    from sqlalchemy.exc import OperationalError
+
+    from app import storage
+    monkeypatch.setattr(storage, "_sleep", lambda s: None)
+    st = PredictionStore(PG_URL)
+    assert st.backend == "postgres" and st._host == "ep-cool-123.us-east-2.aws.neon.tech"
+
+    class Boom:
+        def connect(self):
+            raise OperationalError(
+                "SELECT 1", {}, Exception(f"FATAL: password authentication failed; dsn={PG_URL} pw=s3cr@t-P4ss"))
+    st.engine = Boom()
+    caplog.set_level(logging.DEBUG, logger="stock-api")
+    with pytest.raises(StorageUnavailable) as e:
+        st.init()
+    assert e.value.body() == {"error": {"code": "STORAGE_UNAVAILABLE", "retryable": True, "retry_after": 30,
+                                        "message": "The prediction log is temporarily unavailable."}}
+    recs = _records(caplog)
+    assert len(recs) == storage.CONNECT_ATTEMPTS  # retried, each attempt logged
+    ctx = recs[-1].ctx
+    assert ctx["backend"] == "postgres" and ctx["host"] == "ep-cool-123.us-east-2.aws.neon.tech"
+    assert ctx["phase"] == "connect" and ctx["error_class"] == "OperationalError" and ctx["op"] == "init"
+    assert recs[0].levelno == logging.WARNING and recs[-1].levelno == logging.ERROR
+    text = _dump(caplog)
+    for bad in ("s3cr", "P4ss", "neon_user", "sslmode", PG_URL):
+        assert bad not in text
+    assert e.value.__cause__ is None and e.value.__suppress_context__
+
+
+def test_init_retries_then_succeeds_postgres_style(monkeypatch, tmp_path, caplog):
+    import logging
+
+    from sqlalchemy.exc import OperationalError
+
+    from app import storage
+    sleeps = []
+    monkeypatch.setattr(storage, "_sleep", sleeps.append)
+    st = PredictionStore(f"sqlite:///{tmp_path / 'r.db'}")
+    st.backend = "postgres"  # exercise the retry path with a working engine
+    real, calls = st.engine.connect, {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise OperationalError("SELECT 1", {}, Exception("server is waking up"))
+        return real()
+    monkeypatch.setattr(st.engine, "connect", flaky)
+    caplog.set_level(logging.DEBUG, logger="stock-api")
+    st.init()
+    assert st._ready and calls["n"] >= 3 and sleeps == [1.0, 3.0]  # create_all reconnects too
+    assert [r.levelno for r in _records(caplog)] == [logging.WARNING, logging.WARNING]
+
+
+def test_postgres_connect_args_and_sqlite_unchanged(monkeypatch):
+    from app import storage
+    seen = {}
+    real = storage.create_engine
+    monkeypatch.setattr(storage, "create_engine", lambda url, **kw: seen.setdefault("kw", kw) and real("sqlite://"))
+    PredictionStore(PG_URL)
+    assert seen["kw"]["connect_args"] == {"connect_timeout": storage.CONNECT_TIMEOUT_S == 10 and 10}
+    assert seen["kw"]["pool_pre_ping"] is True
+    seen.clear()
+    PredictionStore("sqlite://")
+    assert seen["kw"] == {"connect_args": {"check_same_thread": False}}
+
+
+def test_sqlite_init_failure_is_single_attempt_and_logged(caplog):
+    import logging
+    st = PredictionStore("sqlite:////nonexistent-dir/x/y.db")
+    caplog.set_level(logging.DEBUG, logger="stock-api")
+    with pytest.raises(StorageUnavailable):
+        st.init()
+    recs = _records(caplog)
+    assert len(recs) == 1 and recs[0].ctx["backend"] == "sqlite" and recs[0].ctx["host"] == "file"
+
+
+def test_query_failure_logged_with_phase_query(store, caplog, monkeypatch):
+    import logging
+
+    from sqlalchemy.exc import OperationalError
+    store.init()
+    caplog.set_level(logging.DEBUG, logger="stock-api")
+
+    class Bad:
+        def connect(self):
+            raise OperationalError("SELECT", {}, Exception("connection reset by peer"))
+        begin = connect
+    monkeypatch.setattr(store, "engine", Bad())
+    with pytest.raises(StorageUnavailable):
+        store.page(5, 0)
+    ctx = _records(caplog)[0].ctx
+    assert ctx["op"] == "page" and ctx["phase"] == "query" and "connection reset" in ctx["message"]

@@ -10,9 +10,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import re
 import threading
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from urllib.parse import quote, unquote
 
 from sqlalchemy import (
     Column,
@@ -28,10 +32,17 @@ from sqlalchemy import (
     select,
     update,
 )
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import SQLAlchemyError
 
 from .errors import ApiError
+from .observability import log_event
+
+log = logging.getLogger("stock-api")
+CONNECT_TIMEOUT_S = 10   # postgres only: a cold serverless compute (e.g. Neon) can take several seconds to wake
+CONNECT_ATTEMPTS = 3     # postgres only: first try + 2 retries
+CONNECT_BACKOFF_S = (1.0, 3.0)
+_sleep = time.sleep      # replaced in tests
 
 metadata = MetaData()
 predictions = Table(
@@ -84,6 +95,24 @@ def _normalise_url(url: str) -> str:
     return url
 
 
+_URL_CREDS = re.compile(r"://[^/\s@]*@")
+_KV_SECRET = re.compile(r"(?i)\b(password|passwd|pwd|sslpassword)\b(\s*[=:]\s*)(\S+)")
+
+
+def redact(text: str, secrets: list[str]) -> str:
+    """Remove anything resembling database credentials from an error message, then collapse and truncate it.
+
+    ``secrets`` are exact strings known to be sensitive (the raw/normalised DATABASE_URL, the password in raw and
+    percent-encoded form, the user name). Pattern rules then catch ``scheme://user:pass@host`` and ``password=...``
+    forms that a driver may have re-formatted.
+    """
+    for sec in sorted({x for x in secrets if x}, key=len, reverse=True):
+        text = text.replace(sec, "[redacted]")
+    text = _URL_CREDS.sub("://[redacted]@", text)
+    text = _KV_SECRET.sub(r"\1\2[redacted]", text)
+    return re.sub(r"\s+", " ", text).strip()[:300]
+
+
 @dataclass
 class Page:
     items: list[dict]
@@ -94,17 +123,47 @@ class PredictionStore:
     def __init__(self, url: str):
         self.url = _normalise_url(url)
         self.backend = "postgres" if self.url.startswith("postgresql") else "sqlite"
-        kwargs = {"connect_args": {"check_same_thread": False}} if self.backend == "sqlite" else {"pool_pre_ping": True}
+        if self.backend == "sqlite":
+            kwargs: dict = {"connect_args": {"check_same_thread": False}}
+        else:
+            kwargs = {"pool_pre_ping": True, "connect_args": {"connect_timeout": CONNECT_TIMEOUT_S}}
         self.engine: Engine = create_engine(self.url, **kwargs)
         self._lock = threading.Lock()  # serialises writers so the hash chain stays linear
         self._ready = False
+        # Values that must never appear in logs.
+        parsed = make_url(self.url)
+        pw = parsed.password or ""
+        self._secrets = [url, self.url, pw, quote(pw, safe=""), unquote(pw), parsed.username or ""]
+        self._host = "file" if self.backend == "sqlite" else (
+            f"{parsed.host}:{parsed.port}" if parsed.port else (parsed.host or "unknown"))
+
+    def _fail(self, op: str, exc: BaseException, phase: str | None = None,
+              level: int = logging.ERROR) -> StorageUnavailable:
+        """Log the cause (class + sanitized message, backend, host; never credentials) and build the public error.
+        The public error body is unchanged; the cause is not chained so it can't leak through tracebacks."""
+        orig = getattr(exc, "orig", None)
+        log_event(log, "storage_error", level, op=op, phase=phase, backend=self.backend, host=self._host,
+                  error_class=type(exc).__name__, driver_error_class=type(orig).__name__ if orig else None,
+                  message=redact(str(orig or exc), self._secrets))
+        return StorageUnavailable()
 
     def init(self) -> None:
+        attempts = CONNECT_ATTEMPTS if self.backend == "postgres" else 1
+        for n in range(1, attempts + 1):
+            try:
+                with self.engine.connect():
+                    break
+            except SQLAlchemyError as exc:
+                last = n == attempts
+                err = self._fail("init", exc, phase="connect", level=logging.ERROR if last else logging.WARNING)
+                if last:
+                    raise err from None
+                _sleep(CONNECT_BACKOFF_S[min(n - 1, len(CONNECT_BACKOFF_S) - 1)])
         try:
             metadata.create_all(self.engine)
-            self._ready = True
         except SQLAlchemyError as exc:
-            raise StorageUnavailable() from exc
+            raise self._fail("init", exc, phase="query") from None
+        self._ready = True
 
     def _ensure(self) -> None:
         if not self._ready:
@@ -128,7 +187,7 @@ class PredictionStore:
                                                         status="pending"))
                 return True
         except SQLAlchemyError as exc:
-            raise StorageUnavailable() from exc
+            raise self._fail("add_prediction", exc, phase="query") from None
 
     def pending(self) -> list[dict]:
         self._ensure()
@@ -138,7 +197,7 @@ class PredictionStore:
                                     .order_by(predictions.c.id)).mappings().all()
             return [dict(r) for r in rows]
         except SQLAlchemyError as exc:
-            raise StorageUnavailable() from exc
+            raise self._fail("pending", exc, phase="query") from None
 
     def resolve(self, pred_id: int, realized_date: str, realized_close: float, realized_return: float) -> bool:
         """Fill in the outcome of a pending row (once). Never touches prediction fields."""
@@ -152,7 +211,7 @@ class PredictionStore:
                             realized_close=realized_close, realized_return=realized_return))
                 return res.rowcount == 1
         except SQLAlchemyError as exc:
-            raise StorageUnavailable() from exc
+            raise self._fail("resolve", exc, phase="query") from None
 
     # --- reads ------------------------------------------------------------------------------
     def page(self, limit: int, offset: int, symbol: str | None = None, status: str | None = None) -> Page:
@@ -169,7 +228,7 @@ class PredictionStore:
                                     .limit(limit).offset(offset)).mappings().all()
             return Page([dict(r) for r in rows], int(total))
         except SQLAlchemyError as exc:
-            raise StorageUnavailable() from exc
+            raise self._fail("page", exc, phase="query") from None
 
     def all_rows(self) -> list[dict]:
         self._ensure()
@@ -177,7 +236,7 @@ class PredictionStore:
             with self.engine.connect() as conn:
                 return [dict(r) for r in conn.execute(select(predictions).order_by(predictions.c.id)).mappings().all()]
         except SQLAlchemyError as exc:
-            raise StorageUnavailable() from exc
+            raise self._fail("all_rows", exc, phase="query") from None
 
     def verify_chain(self) -> bool:
         prev = GENESIS
