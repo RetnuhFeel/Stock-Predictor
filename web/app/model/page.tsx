@@ -35,6 +35,18 @@ export default function Model() {
         <li>No transaction costs, no survivorship correction, no news or earnings awareness. Unofficial, possibly delayed data.</li>
         <li>A good past result is not a promise: markets change.</li>
       </ul>
+      <h2>Experimental: spike scenario</h2>
+      <p>
+        The forecast view has an optional, off-by-default <strong>Spike scenario</strong> panel. It runs a jump-diffusion Monte Carlo (2,000 seeded paths)
+        calibrated from the ticker&apos;s own last ~2 years: days that move more than 2.5 robust standard deviations count as jumps (up and down counted
+        separately, so asymmetry is kept) and the simulation resamples those historical jump sizes. Jumps are compensated so they add spikes, not extra trend.
+        Every simulated price is then <strong>clamped</strong> to the standard forecast&apos;s normal 80% range for that day, and the panel reports how often that happened.
+      </p>
+      <ul>
+        <li><strong>Simulated, not predicted:</strong> it does not know when a spike will occur or its direction.</li>
+        <li><strong>Backtest:</strong> same walk-forward folds and embargo as above. It compares how often the real move landed inside each range, a combined width-and-miss score (Winkler interval score) with a bootstrap 90% range, and the accuracy of the median path. We only say &ldquo;better&rdquo; for a change of at least 2% whose 90% range excludes zero. In our checks on SPY, AAPL, MSFT, NVDA and TSLA (5 and 20 days) the median path was never clearly more accurate than the standard forecast, and because of the clamp the spike range is never wider than the standard band (often identical, sometimes narrower and then it contained fewer real outcomes). See the docs for the numbers.</li>
+        <li><strong>Not scored:</strong> it is never part of the live track record&apos;s logged predictions.</li>
+      </ul>
       <ModelReport />
       <ModelExplorer />
       <p>

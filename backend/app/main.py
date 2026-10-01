@@ -34,6 +34,7 @@ from .observability import (
     setup_logging,
 )
 from .providers import BaseProvider, create_provider
+from .spikes import spike_forecast
 from .storage import PredictionStore, now_iso
 from .symbols import normalize_symbol
 from .trackrecord import public_row, record_from_forecast, resolve_pending, scorecard
@@ -94,7 +95,7 @@ async def observe_and_limit(request: Request, call_next):
         retry = None
         if path.startswith("/api/") and config.RATE_LIMIT_PER_MIN > 0:
             retry = _limited("api", _client_id(request), config.RATE_LIMIT_PER_MIN, time.monotonic())
-        heavy = path.startswith(("/api/compare-models/", "/api/volatility/", "/api/trending"))
+        heavy = path.startswith(("/api/compare-models/", "/api/volatility/", "/api/spikes/", "/api/trending"))
         if retry is None and heavy and config.RATE_LIMIT_PER_MIN > 0:
             retry = _limited("heavy", _client_id(request), config.HEAVY_RATE_PER_MIN, time.monotonic())
         if retry is None and path == "/api/model-report" and config.RATE_LIMIT_PER_MIN > 0:
@@ -410,6 +411,27 @@ def volatility_endpoint(symbol: str, horizon: int = Query(5, ge=1, le=config.MAX
     key = ("vol", provider.name, sym, horizon, df.index[-1].date())
     result = cache.fetch(key, config.MODELS_TTL_S,
                          lambda: {"symbol": sym, **forecast_volatility(df["Close"], horizon)}).value
+    return {**result, **_freshness(df, hist), "disclaimer": config.DISCLAIMER}
+
+
+@app.get("/api/spikes/{symbol}")
+def spikes_endpoint(symbol: str, horizon: int = Query(5, ge=1, le=config.MAX_HORIZON),
+                    provider: BaseProvider = Depends(get_provider)):
+    """EXPERIMENTAL: simulated up/down spikes (jump-diffusion Monte Carlo) clamped inside the standard forecast band.
+
+    Separate from /api/forecast and never used by the prediction log. Includes a walk-forward backtest of the
+    spike range against the standard interval, reported whichever way it falls.
+    """
+    sym = normalize_symbol(symbol)
+    hist = _history(provider, sym, "5y")
+    df = hist.value
+
+    def build():
+        base, _, _ = _forecast_for(provider, sym, horizon)
+        return {"symbol": sym, **spike_forecast(df["Close"], horizon, base)}
+
+    key = ("spikes", provider.name, sym, horizon, df.index[-1].date())
+    result = cache.fetch(key, config.MODELS_TTL_S, build).value
     return {**result, **_freshness(df, hist), "disclaimer": config.DISCLAIMER}
 
 

@@ -7,6 +7,7 @@ import { useOnline } from "@/lib/online";
 import { ModelComparison } from "./ModelComparison";
 import { NewsPanel } from "./NewsPanel";
 import { ErrorNotice, OutdatedLabel } from "./Notices";
+import { SpikePanel } from "./SpikePanel";
 import { VolatilityPanel } from "./VolatilityPanel";
 import type { Forecast, History } from "@/lib/types";
 
@@ -130,6 +131,7 @@ export function StockPanel({ symbol }: { symbol: string }) {
           <BacktestSummary backtest={fc.data.backtest} horizon={fc.data.horizon_days} />
         </>
       )}
+      <SpikePanel symbol={symbol} horizon={horizon} />
       <VolatilityPanel symbol={symbol} horizon={horizon} />
       <ModelComparison symbol={symbol} horizon={horizon} />
       <NewsPanel symbol={symbol} />

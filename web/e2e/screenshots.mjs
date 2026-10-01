@@ -43,6 +43,32 @@ const shot = (page, name, opts = {}) => page.screenshot({ path: `${OUT}/${name}`
   await shot(mp, "mobile-lists.png");
   await m.close();
 }
+// Experimental spike scenario (desktop + mobile), real backend. Toggle is off by default.
+{
+  const c = await ctx({ colorScheme: "light", viewport: { width: 1280, height: 900 } });
+  const page = await c.newPage();
+  await page.goto(WEB); await accept(page); await forecastReady(page);
+  await page.getByRole("combobox", { name: "List", exact: true }).selectOption("default");
+  await page.getByText(/Experimental \d+-day estimate/).waitFor({ timeout: 120000 });
+  await page.getByRole("checkbox", { name: "Show spike scenario" }).check();
+  await page.getByText(/Did it help in past tests/).waitFor({ timeout: 120000 });
+  const sec = page.locator("section[aria-labelledby=spike-title]");
+  await sec.scrollIntoViewIfNeeded(); await page.waitForTimeout(600);
+  await sec.screenshot({ path: `${OUT}/spikes-light.png` });
+  await c.close();
+  const m = await ctx({ colorScheme: "light", viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1.5 });
+  const mp = await m.newPage();
+  await mp.goto(WEB); await accept(mp);
+  await mp.getByRole("combobox", { name: "List", exact: true }).selectOption("default");
+  await mp.getByText(/Experimental \d+-day estimate/).waitFor({ timeout: 120000 });
+  await mp.getByRole("checkbox", { name: "Show spike scenario" }).check();
+  await mp.getByText(/Did it help in past tests/).waitFor({ timeout: 120000 });
+  const ms = mp.locator("section[aria-labelledby=spike-title]");
+  await ms.scrollIntoViewIfNeeded(); await mp.waitForTimeout(600);
+  await ms.screenshot({ path: `${OUT}/mobile-spikes.png` });
+  await m.close();
+}
+if (process.env.ONLY === "spikes") { await browser.close(); console.log("done (spikes only)"); process.exit(0); }
 if (process.env.ONLY === "lists") { await browser.close(); console.log("done (lists only)"); process.exit(0); }
 
 // Desktop light + dark
