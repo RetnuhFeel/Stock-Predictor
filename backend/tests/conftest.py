@@ -25,6 +25,7 @@ class FakeProvider(BaseProvider):
     def __init__(self):
         self.calls = 0
         self.fail_with = None
+        self.fail_news = None
 
     def history(self, symbol, period):
         self.calls += 1
@@ -35,6 +36,12 @@ class FakeProvider(BaseProvider):
         df = synthetic_prices()
         n = {"5d": 5, "1mo": 21, "3mo": 63, "6mo": 126, "1y": 252, "2y": 504, "5y": 900}[period]
         return df.tail(n)
+
+    def news(self, symbol):
+        if self.fail_news:
+            raise self.fail_news
+        return [{"headline": "Acme beats estimates", "source": "Wire", "url": "https://example.com/a",
+                 "published_at": "2026-09-30T13:00:00Z"}]
 
     def search(self, query):
         return [{"symbol": "AAPL", "name": "Apple Inc.", "exchange": "NASDAQ"}]
@@ -50,6 +57,7 @@ def client(fake, monkeypatch):
     monkeypatch.setattr(config, "RATE_LIMIT_PER_MIN", 1000)
     main.cache.clear()
     main._hits.clear()
+    main.stats.reset()
     main.app.dependency_overrides[main.get_provider] = lambda: fake
     yield TestClient(main.app)
     main.app.dependency_overrides.clear()

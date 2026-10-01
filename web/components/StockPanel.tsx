@@ -3,11 +3,13 @@ import { useMemo, useState } from "react";
 import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { useApi } from "@/lib/api";
 import { BacktestSummary } from "./BacktestSummary";
+import { useOnline } from "@/lib/online";
+import { NewsPanel } from "./NewsPanel";
 import { ErrorNotice, OutdatedLabel } from "./Notices";
 import type { Forecast, History } from "@/lib/types";
 
 const RANGES = ["1mo", "3mo", "6mo", "1y", "2y"] as const;
-const HORIZONS = [1, 5, 10, 20];
+const HORIZONS = [1, 5, 10, 20, 40, 60]; // trading days; the backend validates 1..60
 function ForecastNote() {
   return (
     <p role="note" className="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
@@ -19,6 +21,25 @@ function ForecastNote() {
 const pct = (x: number | null | undefined, d = 2) => (x == null ? "—" : `${(x * 100).toFixed(d)}%`);
 
 type Row = { date: string; close?: number; mid?: number; band?: [number, number] };
+
+function ChartTable({ history, forecast }: { history: History; forecast?: Forecast }) {
+  const recent = history.points.slice(-10);
+  return (
+    <details className="text-sm">
+      <summary className="cursor-pointer font-medium">View chart data as a table</summary>
+      <div className="mt-2 overflow-x-auto">
+        <table className="w-full text-sm">
+          <caption className="sr-only">Recent closing prices{forecast ? " and forecast path with 80% interval" : ""} for {history.symbol}</caption>
+          <thead><tr className="text-left text-slate-600 dark:text-slate-300"><th scope="col">Date</th><th scope="col">Type</th><th scope="col" className="text-right">Price</th><th scope="col" className="text-right">80% range</th></tr></thead>
+          <tbody>
+            {recent.map((p) => (<tr key={p.date} className="border-t border-slate-200 dark:border-slate-800"><td>{p.date}</td><td>Close</td><td className="text-right">${p.close.toFixed(2)}</td><td className="text-right">—</td></tr>))}
+            {forecast?.path.map((p) => (<tr key={"f" + p.date} className="border-t border-slate-200 dark:border-slate-800"><td>{p.date}</td><td>Forecast</td><td className="text-right">${p.mid.toFixed(2)}</td><td className="text-right">${p.low.toFixed(2)} – ${p.high.toFixed(2)}</td></tr>))}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  );
+}
 
 function Chart({ history, forecast }: { history: History; forecast?: Forecast }) {
   const data = useMemo(() => {
@@ -53,36 +74,41 @@ export function StockPanel({ symbol }: { symbol: string }) {
   const [range, setRange] = useState<(typeof RANGES)[number]>("6mo");
   const [horizon, setHorizon] = useState(5);
   const sym = encodeURIComponent(symbol);
+  const online = useOnline();
   const hist = useApi<History>(`/api/history/${sym}?range=${range}`);
   const fc = useApi<Forecast>(`/api/forecast/${sym}?horizon=${horizon}`, { cheap: false });
 
-  const btn = (active: boolean) => `rounded px-2 py-1 text-xs ${active ? "bg-blue-600 text-white" : "bg-slate-200 dark:bg-slate-800"}`;
+  const btn = (active: boolean) => `rounded px-2 py-1 text-xs font-medium ${active ? "bg-blue-700 text-white" : "bg-slate-200 text-slate-900 dark:bg-slate-800 dark:text-slate-100"}`;
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-xl font-bold">{symbol}</h2>
-        <div className="flex gap-1" aria-label="Chart range">{RANGES.map((r) => (<button key={r} className={btn(r === range)} onClick={() => setRange(r)}>{r}</button>))}</div>
+        <div className="flex gap-1" role="group" aria-label="Chart range">{RANGES.map((r) => (<button key={r} className={btn(r === range)} aria-pressed={r === range} onClick={() => setRange(r)}>{r}</button>))}</div>
       </div>
 
-      {hist.loading && !hist.data && <p role="status" className="text-sm text-slate-500">Loading prices…</p>}
-      {hist.failure && <ErrorNotice failure={hist.failure} onRetry={hist.retry} what="Price history" />}
+      {hist.loading && !hist.data && <p role="status" className="text-sm text-slate-700 dark:text-slate-300">Loading prices…</p>}
+      {hist.failure && !(hist.data && !online) && <ErrorNotice failure={hist.failure} onRetry={hist.retry} what="Price history" />}
       {hist.data && (
         <>
           <OutdatedLabel fromSaved={hist.fromSaved} savedAt={hist.savedAt} stale={hist.data.stale} delayed={hist.data.is_delayed}
             asOf={hist.data.data_as_of} refreshing={hist.loading} onRetry={hist.retry} />
           <Chart history={hist.data} forecast={fc.data} />
+          <ChartTable history={hist.data} forecast={fc.data} />
           {fc.data && <ForecastNote />}
         </>
       )}
 
       <div className="flex flex-wrap items-center gap-2 text-sm">
-        <span>Forecast horizon:</span>
-        {HORIZONS.map((h) => (<button key={h} className={btn(h === horizon)} onClick={() => setHorizon(h)}>{h}d</button>))}
+        <span id="horizon-label">Forecast horizon (trading days):</span>
+        <div className="flex flex-wrap gap-1" role="group" aria-labelledby="horizon-label">
+          {HORIZONS.map((h) => (<button key={h} className={btn(h === horizon)} aria-pressed={h === horizon} onClick={() => setHorizon(h)}>{h}d</button>))}
+        </div>
+        {horizon >= 20 && <span className="text-xs text-slate-600 dark:text-slate-300">Longer horizons mean wider ranges and fewer independent backtests.</span>}
       </div>
 
-      {fc.loading && !fc.data && <p role="status" className="text-sm text-slate-500">Training model &amp; running backtest… (can take a few seconds)</p>}
-      {fc.failure && <ErrorNotice failure={fc.failure} onRetry={fc.retry} what="Forecast" />}
+      {fc.loading && !fc.data && <p role="status" className="text-sm text-slate-700 dark:text-slate-300">Training model &amp; running backtest… (can take a few seconds)</p>}
+      {fc.failure && !(fc.data && !online) && <ErrorNotice failure={fc.failure} onRetry={fc.retry} what="Forecast" />}
       {fc.data && (
         <>
           <OutdatedLabel fromSaved={fc.fromSaved} savedAt={fc.savedAt} stale={fc.data.stale} delayed={fc.data.is_delayed}
@@ -102,6 +128,7 @@ export function StockPanel({ symbol }: { symbol: string }) {
           <BacktestSummary backtest={fc.data.backtest} horizon={fc.data.horizon_days} />
         </>
       )}
+      <NewsPanel symbol={symbol} />
     </div>
   );
 }

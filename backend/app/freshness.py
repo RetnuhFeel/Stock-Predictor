@@ -13,6 +13,24 @@ def today_ny() -> date:
     return datetime.now(ZoneInfo("America/New_York")).date()
 
 
+def _stale_warning(message: str) -> dict:
+    return {"code": "STALE_DATA", "message": f"Data may be outdated: {message}."}
+
+
+def describe_fetch(fetched_at: float, served_from_stale_cache: bool, data_as_of: str | None = None) -> dict:
+    """Freshness fields for data that has no daily-bar date (e.g. news)."""
+    warnings = []
+    if served_from_stale_cache:
+        warnings.append(_stale_warning("the data provider is currently failing, so the last good copy is shown"))
+    return {
+        "data_as_of": data_as_of,
+        "fetched_at": datetime.fromtimestamp(fetched_at, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "is_delayed": False,
+        "stale": served_from_stale_cache,
+        "warnings": warnings,
+    }
+
+
 def describe(last_bar: date, fetched_at: float, served_from_stale_cache: bool) -> dict:
     """Freshness fields to merge into a response.
 
@@ -25,15 +43,9 @@ def describe(last_bar: date, fetched_at: float, served_from_stale_cache: bool) -
     """
     lag = int(np.busday_count(last_bar, today_ny()))
     stale = served_from_stale_cache or lag >= STALE_AFTER_BUSINESS_DAYS
-    warnings = []
-    if stale:
-        why = "the data provider is currently failing, so the last good copy is shown" if served_from_stale_cache \
-            else f"the latest price bar is {lag} business days old"
-        warnings.append({"code": "STALE_DATA", "message": f"Data may be outdated: {why}."})
-    return {
-        "data_as_of": last_bar.isoformat(),
-        "fetched_at": datetime.fromtimestamp(fetched_at, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "is_delayed": lag >= 2,
-        "stale": stale,
-        "warnings": warnings,
-    }
+    out = describe_fetch(fetched_at, served_from_stale_cache, last_bar.isoformat())
+    out["is_delayed"] = lag >= 2
+    out["stale"] = stale
+    if stale and not served_from_stale_cache:
+        out["warnings"] = [_stale_warning(f"the latest price bar is {lag} business days old")]
+    return out

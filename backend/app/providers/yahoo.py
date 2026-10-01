@@ -1,6 +1,9 @@
 """Yahoo Finance via yfinance: no API key, unofficial, may rate-limit or break at any time."""
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from urllib.parse import urlparse
+
 import pandas as pd
 
 from .. import config
@@ -61,3 +64,44 @@ class YahooProvider(BaseProvider):
             return out
 
         return with_retries(once)
+
+    def news(self, symbol: str) -> list[dict]:
+        def once() -> list[dict]:
+            try:
+                import yfinance as yf
+
+                raw = yf.Ticker(symbol).news
+            except Exception as exc:
+                raise _translate(exc, symbol) from exc
+            return parse_news(raw or [])
+
+        return with_retries(once)
+
+
+def _safe_url(url: object) -> str | None:
+    if not isinstance(url, str):
+        return None
+    parts = urlparse(url.strip())
+    return url.strip()[:500] if parts.scheme in {"http", "https"} and parts.netloc else None
+
+
+def parse_news(raw: list) -> list[dict]:
+    """Normalise yfinance news items (new nested format and the older flat one). Link-out data only."""
+    out = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        c = item.get("content") if isinstance(item.get("content"), dict) else item
+        title = str(c.get("title") or "").strip()
+        link = c.get("canonicalUrl") or c.get("clickThroughUrl") or {}
+        url = _safe_url(link.get("url") if isinstance(link, dict) else None) or _safe_url(c.get("link"))
+        prov = c.get("provider")
+        source = (prov.get("displayName") if isinstance(prov, dict) else None) or c.get("publisher") or ""
+        published = c.get("pubDate")
+        if not published and isinstance(c.get("providerPublishTime"), int | float):
+            published = datetime.fromtimestamp(c["providerPublishTime"], UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if not title or not url or not published:
+            continue
+        out.append({"headline": title[:300], "source": str(source)[:80], "url": url, "published_at": str(published)})
+    out.sort(key=lambda x: x["published_at"], reverse=True)
+    return out

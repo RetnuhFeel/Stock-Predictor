@@ -33,6 +33,12 @@ class BaseProvider(ABC):
     def search(self, query: str) -> list[dict]:
         """[{"symbol", "name", "exchange"}, ...]"""
 
+    def news(self, symbol: str) -> list[dict]:
+        """Recent headlines [{"headline", "source", "url", "published_at"(ISO 8601 UTC)}], newest first.
+
+        Optional: providers without a news feed return an empty list."""
+        return []
+
     def quote(self, symbol: str) -> dict:
         df = self.history(symbol, "5d")
         close = df["Close"].dropna()

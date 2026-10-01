@@ -186,6 +186,8 @@ def forecast(close: pd.Series, horizon: int) -> dict:
         "path": path,
         "backtest": {
             "method": f"expanding-window walk-forward, {wf.n_folds} folds, {horizon}-day embargo",
+            "embargo_days": horizon,
+            "horizon_days": horizon,
             "n_test_points": n_test,
             "n_independent_tests": n_independent,
             "small_sample": bool(n_independent < MIN_INDEPENDENT_TESTS),

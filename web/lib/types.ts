@@ -56,3 +56,15 @@ export type Forecast = Freshness & {
 };
 
 export type SearchResult = { symbol: string; name: string; exchange: string };
+
+export type NewsItem = { headline: string; source: string; url: string; published_at: string };
+export type News = Freshness & { symbol: string; items: NewsItem[]; note: string };
+
+export type CompareSeries = { symbol: string; start_price: number; end_price: number; change_percent: number; points: number[] };
+export type Compare = Freshness & {
+  range: string;
+  dates: string[];
+  series: CompareSeries[];
+  failed: { symbol: string; code: string; message: string }[];
+  base: string;
+};

@@ -8,6 +8,8 @@ services:
       RATE_LIMIT_PER_MIN: ${RATE_LIMIT_PER_MIN:-60}
       DATA_PROVIDER: ${DATA_PROVIDER:-yfinance}
       TWELVEDATA_API_KEY: ${TWELVEDATA_API_KEY:-}  # only needed for DATA_PROVIDER=twelvedata
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}  # unset = /api/_stats disabled
+      CLIENT_ERROR_LOGGING: ${CLIENT_ERROR_LOGGING:-false}
     ports: ["8000:8000"]
     restart: unless-stopped
 
@@ -17,6 +19,7 @@ services:
       args:
         # Inlined into the browser bundle at build time: must be reachable FROM THE BROWSER
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+        NEXT_PUBLIC_ERROR_REPORTING: ${NEXT_PUBLIC_ERROR_REPORTING:-false}
     ports: ["3000:3000"]
     depends_on: [api]
     restart: unless-stopped

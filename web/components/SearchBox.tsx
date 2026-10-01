@@ -52,7 +52,7 @@ export function SearchBox({ onPick }: { onPick: (symbol: string) => void }) {
             <li key={r.symbol}>
               <button type="button" onClick={() => pick(r.symbol)} className="flex w-full justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-800">
                 <span className="font-semibold">{r.symbol}</span>
-                <span className="truncate text-slate-500">{r.name} {r.exchange && `· ${r.exchange}`}</span>
+                <span className="truncate text-slate-700 dark:text-slate-300">{r.name} {r.exchange && `· ${r.exchange}`}</span>
               </button>
             </li>
           ))}

@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { DisclaimerBanner, Footer } from "@/components/Disclaimer";
+import { ErrorReporter } from "@/components/ErrorReporter";
 import { ServiceWorker } from "@/components/ServiceWorker";
 import { ackBootScript } from "@/lib/ackConfig";
 
@@ -31,10 +32,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script dangerouslySetInnerHTML={{ __html: themeScript + ackBootScript }} />
       </head>
       <body>
+        <a href="#main" className="skip-link">Skip to main content</a>
         <DisclaimerBanner />
         {children}
         <Footer />
         <ServiceWorker />
+        <ErrorReporter />
       </body>
     </html>
   );
