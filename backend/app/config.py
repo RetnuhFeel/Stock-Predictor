@@ -19,3 +19,10 @@ FORECAST_TTL_S = int(os.getenv("FORECAST_TTL_S", "3600"))
 
 RANGES = {"1mo": "1mo", "3mo": "3mo", "6mo": "6mo", "1y": "1y", "2y": "2y", "5y": "5y"}
 MAX_HORIZON = 30
+
+# Market data provider: "yfinance" (default, no key) or "twelvedata" (needs TWELVEDATA_API_KEY)
+DATA_PROVIDER = os.getenv("DATA_PROVIDER", "yfinance")
+UPSTREAM_TIMEOUT_S = float(os.getenv("UPSTREAM_TIMEOUT_S", "10"))   # per attempt
+UPSTREAM_RETRIES = int(os.getenv("UPSTREAM_RETRIES", "2"))           # extra attempts for transient failures
+# If the provider fails, serve a cached copy up to this old (flagged stale) instead of an error
+STALE_MAX_AGE_S = int(os.getenv("STALE_MAX_AGE_S", "86400"))

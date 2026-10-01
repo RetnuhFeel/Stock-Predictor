@@ -1,20 +1,21 @@
 "use client";
 import { useApi } from "@/lib/api";
+import { friendlyMessage } from "@/lib/errors";
 import type { Quote } from "@/lib/types";
 
 function Row({ symbol, active, onSelect, onRemove }: { symbol: string; active: boolean; onSelect: () => void; onRemove: () => void }) {
-  const { data, error, loading } = useApi<Quote>(`/api/quote/${encodeURIComponent(symbol)}`);
+  const { data, failure, loading, fromSaved } = useApi<Quote>(`/api/quote/${encodeURIComponent(symbol)}`);
   const up = (data?.change ?? 0) >= 0;
   return (
     <li className={`flex items-center rounded-md border ${active ? "border-blue-500 bg-blue-50 dark:bg-blue-950" : "border-slate-200 dark:border-slate-800"}`}>
       <button onClick={onSelect} className="flex flex-1 items-center justify-between px-3 py-2 text-left">
         <span className="font-semibold">{symbol}</span>
         <span className="text-right text-sm">
-          {loading && <span className="text-slate-400">…</span>}
-          {error && <span className="text-red-500" title={error}>n/a</span>}
+          {loading && !data && <span className="text-slate-400">…</span>}
+          {failure && !data && <span className="text-red-600 dark:text-red-400" title={friendlyMessage(failure)}>n/a</span>}
           {data && (
             <>
-              <span className="block">${data.price.toFixed(2)}</span>
+              <span className="block">${data.price.toFixed(2)}{(fromSaved || data.stale) && <span title="May be outdated" aria-label="may be outdated"> 🕒</span>}</span>
               <span className={up ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}>
                 {up ? "+" : ""}{data.change_percent.toFixed(2)}%
               </span>

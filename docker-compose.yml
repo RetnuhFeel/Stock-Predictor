@@ -6,6 +6,8 @@ services:
       # Origins allowed to call the API from a browser (comma-separated)
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       RATE_LIMIT_PER_MIN: ${RATE_LIMIT_PER_MIN:-60}
+      DATA_PROVIDER: ${DATA_PROVIDER:-yfinance}
+      TWELVEDATA_API_KEY: ${TWELVEDATA_API_KEY:-}  # only needed for DATA_PROVIDER=twelvedata
     ports: ["8000:8000"]
     restart: unless-stopped
 

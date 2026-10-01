@@ -2,6 +2,8 @@
 import { useMemo, useState } from "react";
 import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { useApi } from "@/lib/api";
+import { BacktestSummary } from "./BacktestSummary";
+import { ErrorNotice, OutdatedLabel } from "./Notices";
 import type { Forecast, History } from "@/lib/types";
 
 const RANGES = ["1mo", "3mo", "6mo", "1y", "2y"] as const;
@@ -47,38 +49,12 @@ function Chart({ history, forecast }: { history: History; forecast?: Forecast })
   );
 }
 
-function Backtest({ f }: { f: Forecast }) {
-  const b = f.backtest;
-  const rows: [string, string, string][] = [
-    ["RMSE (log return)", pct(b.model.rmse), pct(b.naive_baseline.rmse)],
-    ["MAE (log return)", pct(b.model.mae), pct(b.naive_baseline.mae)],
-    ["Direction hit-rate", pct(b.model.directional_accuracy, 0), pct(b.naive_baseline.directional_accuracy, 0) + " (always up)"],
-  ];
-  return (
-    <section className="rounded-md border border-slate-200 p-4 dark:border-slate-800" aria-label="Backtest accuracy">
-      <h3 className="font-semibold">Backtest: model vs. naive baseline</h3>
-      <p className={`mt-1 text-sm font-medium ${b.beats_baseline ? "text-green-600 dark:text-green-400" : "text-amber-700 dark:text-amber-300"}`}>
-        {b.beats_baseline
-          ? `Model error was ${(b.skill_vs_baseline * 100).toFixed(1)}% lower than "price stays flat" in the backtest — past results may not repeat.`
-          : "The model did not meaningfully beat \"price stays flat\". Treat the forecast as noise."}
-      </p>
-      <div className="overflow-x-auto">
-        <table className="mt-3 w-full text-sm">
-          <thead><tr className="text-left text-slate-500"><th className="py-1 pr-2">Metric</th><th className="pr-2">Model</th><th>Naive baseline</th></tr></thead>
-          <tbody>{rows.map(([m, a, c]) => (<tr key={m} className="border-t border-slate-100 dark:border-slate-800"><td className="py-1 pr-2">{m}</td><td className="pr-2">{a}</td><td>{c}</td></tr>))}</tbody>
-        </table>
-      </div>
-      <p className="mt-2 text-xs text-slate-500">{b.method}; {b.n_test_points} out-of-sample points. {b.note}</p>
-    </section>
-  );
-}
-
 export function StockPanel({ symbol }: { symbol: string }) {
   const [range, setRange] = useState<(typeof RANGES)[number]>("6mo");
   const [horizon, setHorizon] = useState(5);
   const sym = encodeURIComponent(symbol);
   const hist = useApi<History>(`/api/history/${sym}?range=${range}`);
-  const fc = useApi<Forecast>(`/api/forecast/${sym}?horizon=${horizon}`);
+  const fc = useApi<Forecast>(`/api/forecast/${sym}?horizon=${horizon}`, { cheap: false });
 
   const btn = (active: boolean) => `rounded px-2 py-1 text-xs ${active ? "bg-blue-600 text-white" : "bg-slate-200 dark:bg-slate-800"}`;
 
@@ -89,20 +65,28 @@ export function StockPanel({ symbol }: { symbol: string }) {
         <div className="flex gap-1" aria-label="Chart range">{RANGES.map((r) => (<button key={r} className={btn(r === range)} onClick={() => setRange(r)}>{r}</button>))}</div>
       </div>
 
-      {hist.loading && <p className="text-sm text-slate-500">Loading prices…</p>}
-      {hist.error && <p role="alert" className="text-sm text-red-600">⚠ {hist.error}</p>}
-      {hist.data && <Chart history={hist.data} forecast={fc.data} />}
-      {fc.data && <ForecastNote />}
+      {hist.loading && !hist.data && <p role="status" className="text-sm text-slate-500">Loading prices…</p>}
+      {hist.failure && <ErrorNotice failure={hist.failure} onRetry={hist.retry} what="Price history" />}
+      {hist.data && (
+        <>
+          <OutdatedLabel fromSaved={hist.fromSaved} savedAt={hist.savedAt} stale={hist.data.stale} delayed={hist.data.is_delayed}
+            asOf={hist.data.data_as_of} refreshing={hist.loading} onRetry={hist.retry} />
+          <Chart history={hist.data} forecast={fc.data} />
+          {fc.data && <ForecastNote />}
+        </>
+      )}
 
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <span>Forecast horizon:</span>
         {HORIZONS.map((h) => (<button key={h} className={btn(h === horizon)} onClick={() => setHorizon(h)}>{h}d</button>))}
       </div>
 
-      {fc.loading && <p className="text-sm text-slate-500">Training model & running backtest… (can take a few seconds)</p>}
-      {fc.error && <p role="alert" className="text-sm text-red-600">⚠ Forecast unavailable: {fc.error}</p>}
+      {fc.loading && !fc.data && <p role="status" className="text-sm text-slate-500">Training model &amp; running backtest… (can take a few seconds)</p>}
+      {fc.failure && <ErrorNotice failure={fc.failure} onRetry={fc.retry} what="Forecast" />}
       {fc.data && (
         <>
+          <OutdatedLabel fromSaved={fc.fromSaved} savedAt={fc.savedAt} stale={fc.data.stale} delayed={fc.data.is_delayed}
+            asOf={fc.data.data_as_of} refreshing={fc.loading} onRetry={fc.retry} />
           <section className="rounded-md border border-amber-300 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/40">
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-amber-800 dark:text-amber-300">
               Experimental · not financial advice
@@ -115,7 +99,7 @@ export function StockPanel({ symbol }: { symbol: string }) {
             <ul className="mt-2 list-disc pl-5 text-xs text-slate-600 dark:text-slate-300">{fc.data.notes.map((n) => (<li key={n}>{n}</li>))}</ul>
             <p className="mt-2 text-xs font-medium">{fc.data.disclaimer}</p>
           </section>
-          <Backtest f={fc.data} />
+          <BacktestSummary backtest={fc.data.backtest} horizon={fc.data.horizon_days} />
         </>
       )}
     </div>
