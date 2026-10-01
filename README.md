@@ -85,6 +85,13 @@ You choose the hosting; nothing is deployed by this repo.
 - **API:** any container host (`backend/Dockerfile`: Fly.io, Render, Cloud Run, a VPS). Set `CORS_ORIGINS` to your web origin(s). The cache and rate limiter are in-memory, so run a single instance or move them to Redis before scaling out.
 - Before going public: have the Terms/Privacy drafts reviewed by a lawyer, check the data provider's terms for your use case, and update the privacy notice if you add logging or analytics.
 
+#### Live demo on Render (free tier)
+
+- Web: https://stock-predictor-web-ts7p.onrender.com/
+- API: https://stock-predictor-api-2dnn.onrender.com/health
+
+Render's free tier **puts services to sleep after ~15 minutes of inactivity**, so the first request after a pause can take a minute or more. The workflow [`.github/workflows/keepalive.yml`](.github/workflows/keepalive.yml) pings both URLs every 10 minutes (with retries) to mitigate this. It is best-effort only: GitHub scheduled runs can be delayed or skipped, and GitHub **disables scheduled workflows after 60 days without repository activity** (re-enable it from the Actions tab). A paid Render instance type is the reliable fix.
+
 ## iOS app
 
 A small SwiftUI app that shows a watchlist (AAPL, GOOGL, TSLA) with the latest price and daily % change, plus a 7-day chart, using [Finnhub](https://finnhub.io). Unchanged by the web work. Requires Xcode 14+ / iOS 16+ and a free Finnhub key set in `NetworkManager.swift` (`apiKey`). Do not commit your real key.
