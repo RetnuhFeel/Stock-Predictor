@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { DisclaimerBanner, Footer } from "@/components/Disclaimer";
 import { ServiceWorker } from "@/components/ServiceWorker";
+import { ackBootScript } from "@/lib/ackConfig";
 
 export const metadata: Metadata = {
   title: "Stock Predictor (experimental)",
@@ -27,7 +28,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+        <script dangerouslySetInnerHTML={{ __html: themeScript + ackBootScript }} />
       </head>
       <body>
         <DisclaimerBanner />

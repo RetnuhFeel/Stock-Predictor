@@ -6,6 +6,14 @@ import type { Forecast, History } from "@/lib/types";
 
 const RANGES = ["1mo", "3mo", "6mo", "1y", "2y"] as const;
 const HORIZONS = [1, 5, 10, 20];
+function ForecastNote() {
+  return (
+    <p role="note" className="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+      ⚠️ Forecast is experimental and not financial advice — predictions are frequently wrong.
+    </p>
+  );
+}
+
 const pct = (x: number | null | undefined, d = 2) => (x == null ? "—" : `${(x * 100).toFixed(d)}%`);
 
 type Row = { date: string; close?: number; mid?: number; band?: [number, number] };
@@ -84,6 +92,7 @@ export function StockPanel({ symbol }: { symbol: string }) {
       {hist.loading && <p className="text-sm text-slate-500">Loading prices…</p>}
       {hist.error && <p role="alert" className="text-sm text-red-600">⚠ {hist.error}</p>}
       {hist.data && <Chart history={hist.data} forecast={fc.data} />}
+      {fc.data && <ForecastNote />}
 
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <span>Forecast horizon:</span>
@@ -95,6 +104,9 @@ export function StockPanel({ symbol }: { symbol: string }) {
       {fc.data && (
         <>
           <section className="rounded-md border border-amber-300 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/40">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-amber-800 dark:text-amber-300">
+              Experimental · not financial advice
+            </p>
             <p className="text-sm">
               Experimental {fc.data.horizon_days}-day estimate: <strong>${fc.data.predicted_price.toFixed(2)}</strong>{" "}
               ({fc.data.predicted_return >= 0 ? "+" : ""}{pct(fc.data.predicted_return)}) — 80% interval{" "}
