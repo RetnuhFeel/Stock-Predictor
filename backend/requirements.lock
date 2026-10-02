@@ -94,7 +94,9 @@ requests==2.34.2
 scikit-learn==1.9.1
     # via -r requirements.txt
 scipy==1.18.1
-    # via scikit-learn
+    # via
+    #   -r requirements.txt
+    #   scikit-learn
 six==1.17.0
     # via python-dateutil
 soupsieve==2.10

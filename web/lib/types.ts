@@ -40,6 +40,26 @@ export type Backtest = {
   note: string;
 };
 
+/** Split-conformal calibration of the forecast range and the coverage measured by replaying it through past data. */
+export type Conformal = {
+  used: boolean;
+  method: string;
+  target_coverage: number;
+  /** half-width in units of (daily volatility x sqrt(horizon)); a normal-theory 80% band would use normal_multiplier */
+  multiplier: number | null;
+  normal_multiplier: number;
+  n_calibration: number;
+  n_calibration_independent: number;
+  /** share of past outcomes that landed inside the range this recipe would have given (null if it could not be measured) */
+  measured_coverage: number | null;
+  measured_coverage_ci_90: [number, number] | null;
+  n_evaluation: number;
+  n_evaluation_independent: number;
+  supported: boolean;
+  reason_not_used: string | null;
+  fallback: string | null;
+};
+
 export type Forecast = Freshness & {
   symbol: string;
   horizon_days: number;
@@ -51,6 +71,8 @@ export type Forecast = Freshness & {
   /** false at long horizons: the range is a volatility cone, not a backtest-calibrated 80% interval */
   interval_calibrated?: boolean;
   interval_method?: string;
+  interval_method_name?: "split_conformal" | "walk_forward_residuals" | "volatility_cone";
+  conformal?: Conformal;
   path: { date: string; mid: number; low: number; high: number }[];
   backtest: Backtest;
   notes: string[];
@@ -83,6 +105,11 @@ export type ReportRow = {
   n_test_points: number;
   n_independent_tests: number;
   small_sample: boolean;
+  /** true when the 80% range is a conformal band whose coverage was measured on past data */
+  range_tested?: boolean;
+  /** share of past outcomes that landed inside the 80% range (replayed on past data); null if not measured */
+  range_coverage?: number | null;
+  range_independent_tests?: number;
   data_as_of: string;
 };
 export type ModelReport = Freshness & {
@@ -119,6 +146,8 @@ export type ModelComparison = Freshness & {
   method: string;
   models: ModelRow[];
   any_beats_naive: boolean;
+  /** volatility (size-of-move) models judged on the same walk-forward test; null if there was not enough history */
+  risk_models?: { headline_model: string; garch: GarchInfo; models: Omit<VolModelRow, "forecast_daily_vol" | "beats_naive">[] } | null;
   n_candidates: number;
   note: string;
   disclaimer: string;
@@ -135,6 +164,22 @@ export type VolModelRow = {
   verdict: Verdict | "baseline";
   forecast_daily_vol: number;
   annualized_vol: number;
+  horizon_vol?: number;
+  /** share of past h-day moves that stayed inside +/- this model's 1-sigma range */
+  one_sigma_coverage?: number;
+  /** same error metric, judged against the headline model (EWMA) instead of the naive baseline; absent on the headline */
+  vs_headline?: { model: string; skill: number; skill_ci_90: [number, number]; verdict: Verdict };
+};
+export type GarchInfo = {
+  available: boolean;
+  reason?: string | null;
+  converged?: boolean;
+  n_failed_fold_fits?: number;
+  params?: { alpha: number; gamma: number; beta: number; persistence: number; half_life_days: number | null; long_run_annual_vol: number; asymmetric: boolean };
+  vs_headline?: { model: string; skill: number; skill_ci_90: [number, number]; verdict: Verdict };
+  horizon_vol?: number;
+  annualized_vol?: number;
+  one_sigma_pct?: number;
 };
 export type Volatility = Freshness & {
   symbol: string;
@@ -149,6 +194,7 @@ export type Volatility = Freshness & {
   skill_vs_naive: number;
   skill_ci_90: [number, number];
   models: VolModelRow[];
+  garch?: GarchInfo;
   n_test_points: number;
   n_independent_tests: number;
   small_sample: boolean;

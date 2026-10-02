@@ -19,7 +19,7 @@ from ..errors import DataUnavailable, UpstreamTimeout
 COLUMNS = ["Open", "High", "Low", "Close", "Volume"]
 
 # yfinance-style period -> approximate number of trading-day bars
-PERIOD_BARS = {"5d": 7, "1mo": 22, "3mo": 66, "6mo": 132, "1y": 253, "2y": 506, "5y": 1260}
+PERIOD_BARS = {"5d": 7, "1mo": 22, "3mo": 66, "6mo": 132, "1y": 253, "2y": 506, "5y": 1260, "10y": 2520}
 
 
 class BaseProvider(ABC):

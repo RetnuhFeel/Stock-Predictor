@@ -17,7 +17,7 @@ const mkBacktest = (h) => ({ method: `expanding-window walk-forward, 6 folds, ${
   small_sample: false, up_rate: 0.56, skill_ci_90: [-0.08, -0.01], model: { rmse: 0.03, mae: 0.02, directional_accuracy: 0.5 },
   naive_baseline: { rmse: 0.028, mae: 0.019, directional_accuracy: 0.56 }, skill_vs_baseline: -0.04, beats_baseline: false, note: "Indicative only." });
 const row = (symbol, v) => ({ symbol, verdict: v, skill_vs_baseline: v === "better" ? 0.05 : -0.04, skill_ci_90: v === "better" ? [0.01, 0.09] : [-0.08, 0.01], model_rmse: 0.03,
-  baseline_rmse: 0.029, hit_rate: 0.52, up_rate: 0.57, n_test_points: 600, n_independent_tests: 120, small_sample: false, data_as_of: "2026-09-30" });
+  baseline_rmse: 0.029, hit_rate: 0.52, up_rate: 0.57, n_test_points: 600, n_independent_tests: 120, small_sample: false, range_tested: true, range_coverage: 0.82, range_independent_tests: 99, data_as_of: "2026-09-30" });
 
 const sc0 = { verdict: "no_data", n_resolved: 0, n_pending: 0, n_dates: 0, n_independent: 0, min_for_verdict: 30 };
 const emptyLog = { items: [], total: 0, limit: 25, offset: 0, scorecard: sc0, chain_ok: true, symbols: ["SPY", "AAPL"], horizon_days: 5, storage: { backend: "sqlite", durable: false }, disclaimer: "Educational only.", ...fresh };
@@ -35,21 +35,29 @@ async function mockApi(context) {
     if (p.startsWith("/api/quote/")) return json({ symbol: p.split("/").pop(), price: 125, previous_close: 124, change: 1, change_percent: 0.8, as_of: "2026-09-30", ...fresh, note: "" });
     if (p.startsWith("/api/history/")) return json({ symbol: p.split("/").pop(), range: "6mo", points: dates.map((d, i) => ({ date: d, close: closes[i], volume: 1000 })), ...fresh });
     if (p.startsWith("/api/forecast/")) { const h = Number(u.searchParams.get("horizon") || 5);
-      return json({ symbol: p.split("/").pop(), horizon_days: h, last_close: 124, last_date: "2026-09-30", predicted_return: 0.01, predicted_price: 125.2, interval_80: { low: 118, high: 131 }, interval_calibrated: h < 120, path: fcPath, backtest: mkBacktest(h), notes: ["Interval is empirical."], disclaimer: "Educational only.", ...fresh }); }
+      return json({ symbol: p.split("/").pop(), horizon_days: h, last_close: 124, last_date: "2026-09-30", predicted_return: 0.01, predicted_price: 125.2, interval_80: { low: 118, high: 131 }, interval_calibrated: h < 120, interval_method_name: h < 120 ? "split_conformal" : "volatility_cone",
+        conformal: h < 120 ? { used: true, method: "split conformal", target_coverage: 0.8, multiplier: 1.4, normal_multiplier: 1.2816, n_calibration: 600, n_calibration_independent: 120, measured_coverage: 0.81, measured_coverage_ci_90: [0.73, 0.87], n_evaluation: 495, n_evaluation_independent: 99, supported: true, reason_not_used: null, fallback: null }
+          : { used: false, method: "split conformal", target_coverage: 0.8, multiplier: 1.5, normal_multiplier: 1.2816, n_calibration: 2200, n_calibration_independent: 8, measured_coverage: 0.9, measured_coverage_ci_90: [0.5, 0.98], n_evaluation: 1200, n_evaluation_independent: 5, supported: false, reason_not_used: "the history holds only about 5 independent 256-day test periods for checking the coverage (need at least 8)", fallback: "volatility_cone" },
+        path: fcPath, backtest: mkBacktest(h), notes: ["Interval is empirical."], disclaimer: "Educational only.", ...fresh }); }
     if (p === "/api/search") return json({ results: [{ symbol: "AAPL", name: "Apple Inc.", exchange: "NMS" }, { symbol: "AMD", name: "Advanced Micro Devices", exchange: "NMS" }] });
     if (p.startsWith("/api/news/")) return json({ symbol: "AAPL", items: [{ headline: "Example headline", source: "Wire", url: "https://example.com/a", published_at: "2026-09-30T13:00:00Z" }], note: "context", ...fresh });
     if (p === "/api/compare") return json({ range: "6mo", dates: ["2026-04-01", "2026-09-30"], series: ["AAPL", "MSFT", "NVDA"].map((s, i) => ({ symbol: s, start_price: 100, end_price: 110 + i, change_percent: 10 + i, points: [0, 10 + i] })), failed: [], base: "Percent change.", ...fresh });
     if (p === "/api/model-report") return json({ horizon_days: 5, rows: [row("SPY", "not_better"), row("AAPL", "inconclusive"), row("MSFT", "better")], failed: [], method: "walk-forward",
       summary: { better: 1, inconclusive: 1, not_better: 1, total: 3 }, disclaimer: "Educational only.", ...fresh });
     if (p.startsWith("/api/compare-models/")) { const h = Number(u.searchParams.get("horizon") || 5);
+      const rm = (model, label, verdict, skill, vs) => ({ model, label, description: "risk desc", typical_error_pct: 40, skill_vs_naive: skill, skill_ci_90: [skill - 0.05, skill + 0.05], verdict, annualized_vol: 0.2, ...(vs ? { vs_headline: vs } : {}) });
       const m = (model, label, verdict, skill) => ({ model, label, description: "desc", rmse: 0.03, mae: 0.02, hit_rate: verdict === "baseline" ? null : 0.51, skill_vs_naive: skill, skill_ci_90: verdict === "baseline" ? [0, 0] : [skill - 0.04, skill + 0.04], beats_naive: verdict === "better", verdict });
       return json({ symbol: p.split("/").pop(), horizon_days: h, embargo_days: h, n_folds: 6, n_test_points: 600, n_independent_tests: 600 / h, small_sample: false, up_rate: 0.56, method: "wf",
-        models: [m("naive", "Naive: price stays flat", "baseline", 0), m("drift", "Drift", "inconclusive", 0.01), m("gbm", "Gradient boosting", "not_better", -0.07)], any_beats_naive: false, n_candidates: 2, note: "Tested several models.", disclaimer: "Educational only.", ...fresh }); }
+        models: [m("naive", "Naive: price stays flat", "baseline", 0), m("drift", "Drift", "inconclusive", 0.01), m("gbm", "Gradient boosting", "not_better", -0.07)], any_beats_naive: false, n_candidates: 2,
+        risk_models: { headline_model: "ewma", garch: { available: true, params: { alpha: 0.02, gamma: 0.09, beta: 0.9, persistence: 0.965, half_life_days: 19, long_run_annual_vol: 0.21, asymmetric: true } },
+          models: [rm("naive", "Naive: recent 21-day volatility", "baseline", 0), rm("ewma", "EWMA (RiskMetrics)", "inconclusive", 0.01), rm("garch", "GJR-GARCH(1,1)", "better", 0.12, { model: "ewma", skill: 0.11, skill_ci_90: [0.03, 0.18], verdict: "better" })] }, note: "Tested several models.", disclaimer: "Educational only.", ...fresh }); }
     if (p.startsWith("/api/volatility/")) { const h = Number(u.searchParams.get("horizon") || 5);
       const vm = (model, verdict, skill) => ({ model, label: model.toUpperCase() + " model", description: "d", typical_error_pct: 40, skill_vs_naive: skill, skill_ci_90: [skill - 0.05, skill + 0.05], beats_naive: false, verdict, forecast_daily_vol: 0.012, annualized_vol: 0.19 });
       return json({ symbol: p.split("/").pop(), horizon_days: h, last_close: 124, headline_model: "ewma", forecast_daily_vol: 0.012, annualized_vol: 0.19, horizon_vol: 0.027,
         risk_range: { one_sigma_pct: 2.7, low: 120.7, high: 127.4, nominal_coverage: 0.68, backtest_coverage: 0.72 }, verdict: "inconclusive", skill_vs_naive: 0.01, skill_ci_90: [-0.04, 0.06],
-        models: [vm("naive", "baseline", 0), vm("ewma", "inconclusive", 0.01)], n_test_points: 600, n_independent_tests: 120, small_sample: false, embargo_days: h, method: "wf", notes: ["Fat tails exist."], disclaimer: "Educational only.", ...fresh }); }
+        models: [vm("naive", "baseline", 0), vm("ewma", "inconclusive", 0.01), { ...vm("garch", "better", 0.12), label: "GJR-GARCH(1,1)", vs_headline: { model: "ewma", skill: 0.11, skill_ci_90: [0.03, 0.18], verdict: "better" } }],
+        garch: { available: true, vs_headline: { model: "ewma", skill: 0.11, skill_ci_90: [0.03, 0.18], verdict: "better" }, horizon_vol: 0.03, annualized_vol: 0.21, one_sigma_pct: 3.0, params: { alpha: 0.02, gamma: 0.09, beta: 0.9, persistence: 0.965, half_life_days: 19, long_run_annual_vol: 0.21, asymmetric: true } },
+        n_test_points: 600, n_independent_tests: 120, small_sample: false, embargo_days: h, method: "wf", notes: ["Fat tails exist."], disclaimer: "Educational only.", ...fresh }); }
     if (p === "/api/trending") { if (globalThis.__trendingFail) return json({ error: { code: "DATA_UNAVAILABLE", message: "x", retryable: true } }, 502);
       return json({ days: 3, limit: 5, items: [["AAPL", "Apple Inc.", 6.1], ["NVDA", "NVIDIA Corporation", 5.2], ["AMD", "Advanced Micro Devices, Inc.", 4.4], ["META", "Meta Platforms, Inc.", 3.9], ["TSLA", "Tesla, Inc.", 3.1]]
         .map(([symbol, name, r], i) => ({ rank: i + 1, symbol, name, return_percent: r, last_close: 120 + i, as_of: "2026-09-30" })), universe_size: 106, evaluated: 104, method: "close-to-close", note: "A plain momentum screen, not a recommendation or a prediction.", disclaimer: "Educational only.", ...fresh }); }
@@ -96,6 +104,13 @@ for (const scheme of ["light", "dark"]) {
   await page.getByRole("heading", { name: "Recent headlines" }).waitFor();
   ok(await page.getByText(/not a trading signal/i).first().isVisible(), `[${scheme}] news labelled as context`);
   ok((await page.locator("[aria-labelledby=bt-title]").innerText()).match(/guessing/i) !== null, `[${scheme}] plain-language backtest verdict shown`);
+  const info = await page.getByTestId("interval-info").innerText();
+  ok(/81% of the time/.test(info) && /73% to 87%/.test(info) && /99 independent 5-day periods/.test(info), `[${scheme}] conformal range shows measured coverage, plausible range and sample size`);
+  ok(await page.getByText(/80% range \(tested on past data\)/).first().isVisible(), `[${scheme}] tested range is labelled as such`);
+  await page.getByTestId("garch-alt").waitFor({ timeout: 15000 });
+  ok(/GJR-GARCH/.test(await page.getByTestId("garch-alt").innerText()) && /headline stays EWMA/.test(await page.getByTestId("garch-alt").innerText()), `[${scheme}] GARCH shown as an alternative next to the EWMA headline`);
+  await page.getByRole("heading", { name: /Risk models/ }).waitFor({ timeout: 15000 });
+  ok((await page.locator("section[aria-labelledby^=mc-title] table").nth(1).locator("tbody tr").count()) === 3 && (await page.locator("section[aria-labelledby^=mc-title] table").nth(1).innerText()).includes("GJR-GARCH(1,1)"), `[${scheme}] model comparison lists GJR-GARCH among the risk models`);
   await page.waitForLoadState("networkidle");
   await axe(page, `[${scheme}] home / forecast`);
   await page.getByRole("button", { name: "10d, 10 trading days", exact: true }).click();
@@ -140,6 +155,9 @@ for (const scheme of ["light", "dark"]) {
   await page.getByRole("button", { name: "256d, 256 trading days", exact: true }).click();
   await page.getByText(/Long-horizon forecasts \(256 trading days/).waitFor({ timeout: 15000 });
   ok(await page.getByText(/highly uncertain/).first().isVisible(), `[${scheme}] long-horizon uncertainty note shown at 256d`);
+  await page.getByTestId("interval-info").waitFor();
+  const info256 = await page.getByTestId("interval-info").innerText();
+  ok(/Uncalibrated range/.test(info256) && /only about 5 independent 256-day test periods/.test(info256) && !/tested on past data/.test(info256), `[${scheme}] 256d range stays uncalibrated and says why conformal was not used`);
   await page.getByRole("button", { name: "10d, 10 trading days", exact: true }).click();
   ok((await page.getByText(/Long-horizon forecasts/).count()) === 0, `[${scheme}] long-horizon note hidden for short horizons`);
   await page.getByText("(10-trading-day forecasts)").waitFor({ timeout: 15000 });
@@ -252,7 +270,7 @@ for (const scheme of ["light", "dark"]) {
   await page.goto(`${WEB}/model`);
   await page.getByText("Model comparison", { exact: false }).first().waitFor();
   await page.getByText(/No model clearly beat/).waitFor({ timeout: 15000 });
-  ok((await page.locator("section[aria-labelledby^=mc-title] table tbody tr").count()) === 3, `[${scheme}] /model: model comparison table rows`);
+  ok((await page.locator("section[aria-labelledby^=mc-title] table").first().locator("tbody tr").count()) === 3, `[${scheme}] /model: model comparison table rows`);
   await axe(page, `[${scheme}] /model with model comparison`);
   // track record: empty state, then populated
   globalThis.__log = emptyLog;

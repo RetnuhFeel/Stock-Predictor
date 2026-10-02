@@ -43,19 +43,30 @@ export function VolatilityPanel({ symbol, horizon }: { symbol: string; horizon: 
               <p className="font-semibold"><span aria-hidden="true">{v.icon} </span>{v.label}</p>
               <p className="mt-1">{v.text} (skill {pct(d.skill_vs_naive)}, 90% range {pct(d.skill_ci_90[0])} to {pct(d.skill_ci_90[1])}; backtest, {d.n_test_points} test days, about {d.n_independent_tests} independent{d.small_sample ? " — small sample" : ""}.)</p>
             </div>
+            {d.garch?.available && d.garch.vs_headline && (
+              <p className="text-xs" data-testid="garch-alt">
+                <strong>Alternative view (GJR-GARCH):</strong> about ±{(d.garch.one_sigma_pct ?? 0).toFixed(1)}% over {d.horizon_days} trading days
+                (annualised ≈ {((d.garch.annualized_vol ?? 0) * 100).toFixed(0)}%), versus ±{d.risk_range.one_sigma_pct.toFixed(1)}% for the headline estimate above.
+                In the backtest it was{" "}
+                {d.garch.vs_headline.verdict === "better" ? "closer than" : d.garch.vs_headline.verdict === "inconclusive" ? "not clearly different from" : "no closer than"}{" "}
+                the headline (error change {pct(d.garch.vs_headline.skill)}, 90% range {pct(d.garch.vs_headline.skill_ci_90[0])} to {pct(d.garch.vs_headline.skill_ci_90[1])}).
+                The headline stays EWMA because it was chosen before looking at results.
+              </p>
+            )}
             <details className="text-sm">
               <summary className="cursor-pointer font-medium">Compare volatility models</summary>
               <div className="mt-2 overflow-x-auto">
                 <table className="w-full text-left text-sm">
                   <caption className="sr-only">Volatility models for {d.symbol}, backtested against recent realised volatility</caption>
-                  <thead><tr className="border-b border-slate-300 dark:border-slate-700"><th scope="col" className="py-1 pr-2">Model</th><th scope="col" className="pr-2 text-right">Annualised</th><th scope="col" className="pr-2 text-right">Skill vs. recent vol</th><th scope="col" className="text-right">Typical error</th></tr></thead>
+                  <thead><tr className="border-b border-slate-300 dark:border-slate-700"><th scope="col" className="py-1 pr-2">Model</th><th scope="col" className="pr-2 text-right">Annualised</th><th scope="col" className="pr-2 text-right">Skill vs. recent vol</th><th scope="col" className="pr-2 text-right">Typical error</th><th scope="col" className="text-right">Vs. EWMA</th></tr></thead>
                   <tbody>
                     {d.models.map((m) => (
                       <tr key={m.model} className="border-b border-slate-200 dark:border-slate-800">
                         <th scope="row" className="py-1 pr-2 text-left font-medium">{m.label}{m.model === d.headline_model ? " (shown above)" : ""}</th>
                         <td className="pr-2 text-right">{(m.annualized_vol * 100).toFixed(0)}%</td>
                         <td className="pr-2 text-right">{m.verdict === "baseline" ? "baseline" : `${pct(m.skill_vs_naive)} (${m.verdict === "better" ? "better" : m.verdict === "inconclusive" ? "inconclusive" : "not better"})`}</td>
-                        <td className="text-right">{m.typical_error_pct.toFixed(0)}%</td>
+                        <td className="pr-2 text-right">{m.typical_error_pct.toFixed(0)}%</td>
+                        <td className="text-right">{m.vs_headline ? `${pct(m.vs_headline.skill)} (${m.vs_headline.verdict === "better" ? "better" : m.vs_headline.verdict === "inconclusive" ? "inconclusive" : "not better"})` : "—"}</td>
                       </tr>
                     ))}
                   </tbody>

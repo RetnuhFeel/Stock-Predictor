@@ -43,7 +43,8 @@ export function ModelReport() {
                   <th scope="col" className="pr-2 text-right">90% range</th>
                   <th scope="col" className="pr-2 text-right">Right direction</th>
                   <th scope="col" className="pr-2 text-right">&ldquo;Always up&rdquo;</th>
-                  <th scope="col" className="text-right">Tests (independent)</th>
+                  <th scope="col" className="pr-2 text-right">Tests (independent)</th>
+                  <th scope="col" className="text-right">80% range held</th>
                 </tr>
               </thead>
               <tbody>
@@ -57,7 +58,8 @@ export function ModelReport() {
                       <td className="pr-2 text-right">{pct(r.skill_ci_90[0])} to {pct(r.skill_ci_90[1])}</td>
                       <td className="pr-2 text-right">{r.hit_rate == null ? "—" : `${(r.hit_rate * 100).toFixed(0)}%`}</td>
                       <td className="pr-2 text-right">{(r.up_rate * 100).toFixed(0)}%</td>
-                      <td className="text-right">{r.n_test_points} ({r.n_independent_tests})</td>
+                      <td className="pr-2 text-right">{r.n_test_points} ({r.n_independent_tests})</td>
+                      <td className="text-right">{r.range_tested && r.range_coverage != null ? `${(r.range_coverage * 100).toFixed(0)}% (${r.range_independent_tests} periods)` : "not verified"}</td>
                     </tr>
                   );
                 })}
@@ -68,7 +70,8 @@ export function ModelReport() {
             <p role="status" className="text-xs">Couldn&apos;t compute: {d.failed.map((f) => f.symbol).join(", ")}. Showing the rest.</p>
           )}
           <p className="text-xs"><strong>How to read this:</strong> &ldquo;Better&rdquo; is only claimed when the whole 90% range is above zero. Test windows overlap, so the number of
-            <em> independent</em> tests is roughly tests ÷ horizon. A model that is right about direction 55% of the time while stocks rose 56% of the time has no edge.</p>
+            <em> independent</em> tests is roughly tests ÷ horizon. A model that is right about direction 55% of the time while stocks rose 56% of the time has no edge.
+            <strong> 80% range held:</strong> replaying the range recipe on past data, how often the real price landed inside it (the target is 80%); &ldquo;not verified&rdquo; means there was not enough history to check.</p>
           <p className="text-xs font-medium">{d.disclaimer}</p>
         </>
       )}

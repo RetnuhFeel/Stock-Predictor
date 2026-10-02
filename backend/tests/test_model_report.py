@@ -16,6 +16,7 @@ def test_report_shape_and_conventions(client, monkeypatch):
     assert sum(body["summary"][k] for k in ("better", "inconclusive", "not_better")) == 2
     assert body["stale"] is False and body["fetched_at"].endswith("Z") and body["disclaimer"]
     assert "embargo" in body["method"]
+    assert row["range_tested"] is True and 0.6 < row["range_coverage"] < 0.95 and row["range_independent_tests"] >= 8
 
 
 def test_report_is_cached_and_bounded(client, fake, monkeypatch):
