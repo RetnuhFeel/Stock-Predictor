@@ -12,11 +12,13 @@ export function ListSwitcher({ state, actions, announce }: { state: ListsState; 
   const selectId = useId();
   const inputId = useId();
   const input = useRef<HTMLInputElement>(null);
+  const select = useRef<HTMLSelectElement>(null);
+  const focusSelect = () => setTimeout(() => select.current?.focus(), 0);  // the clicked button is unmounted: keep focus in the widget
   const current = state.lists.find((l) => l.id === state.selectedId);
 
   const reset = () => { setMode("idle"); setName(""); setError(""); };
   const finish = (res: Result) => {
-    if (res.ok) { announce(res.message ?? "Done."); reset(); } else setError(res.reason);
+    if (res.ok) { announce(res.message ?? "Done."); reset(); focusSelect(); } else setError(res.reason);
   };
   const open = (m: Mode, initial = "") => { setMode(m); setName(initial); setError(""); setTimeout(() => input.current?.focus(), 0); };
 
@@ -27,6 +29,7 @@ export function ListSwitcher({ state, actions, announce }: { state: ListsState; 
         <label htmlFor={selectId} className="block text-xs font-medium">List</label>
         <select
           id={selectId}
+          ref={select}
           value={state.selectedId}
           onChange={(e) => { actions.select(e.target.value); reset(); announce(`Showing ${e.target.value === TRENDING_ID ? TRENDING_NAME : state.lists.find((l) => l.id === e.target.value)?.name ?? "list"}.`); }}
           className="w-full rounded border border-slate-400 bg-white px-2 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-900"
@@ -52,12 +55,12 @@ export function ListSwitcher({ state, actions, announce }: { state: ListsState; 
           <label htmlFor={inputId} className="block text-xs font-medium">{mode === "create" ? "Name of the new list" : `New name for ${current?.name}`}</label>
           <input id={inputId} ref={input} value={name} onChange={(e) => setName(e.target.value)} maxLength={60} autoComplete="off"
             aria-invalid={error ? true : undefined} aria-describedby={error ? `${inputId}-err` : undefined}
-            onKeyDown={(e) => e.key === "Escape" && reset()}
+            onKeyDown={(e) => { if (e.key === "Escape") { reset(); focusSelect(); } }}
             className="w-full rounded border border-slate-400 bg-white px-2 py-1 text-sm dark:border-slate-600 dark:bg-slate-900" />
           {error && <p id={`${inputId}-err`} role="alert" className="text-xs text-red-700 dark:text-red-300">{error}</p>}
           <div className="flex gap-2">
             <button type="submit" className="rounded bg-blue-700 px-3 py-1 text-xs font-semibold text-white hover:bg-blue-800">{mode === "create" ? "Create" : "Save"}</button>
-            <button type="button" className={btn} onClick={reset}>Cancel</button>
+            <button type="button" className={btn} onClick={() => { reset(); focusSelect(); }}>Cancel</button>
           </div>
         </form>
       )}
@@ -67,7 +70,7 @@ export function ListSwitcher({ state, actions, announce }: { state: ListsState; 
           <p>Delete <strong>{current.name}</strong> and its {current.symbols.length} ticker{current.symbols.length === 1 ? "" : "s"}? This can&apos;t be undone.</p>
           <div className="flex gap-2">
             <button autoFocus className="rounded bg-red-700 px-3 py-1 text-xs font-semibold text-white hover:bg-red-800" onClick={() => finish(actions.remove(current.id))}>Yes, delete</button>
-            <button className={btn} onClick={reset}>Cancel</button>
+            <button className={btn} onClick={() => { reset(); focusSelect(); }}>Cancel</button>
           </div>
         </div>
       )}

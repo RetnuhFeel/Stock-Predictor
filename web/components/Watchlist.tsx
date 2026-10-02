@@ -1,4 +1,5 @@
 "use client";
+import { useEffect, useRef } from "react";
 import { useApi } from "@/lib/api";
 import { friendlyMessage } from "@/lib/errors";
 import type { Quote } from "@/lib/types";
@@ -11,7 +12,7 @@ function Row({ symbol, active, onSelect, onRemove, extra }: { symbol: string; ac
   return (
     <li className={`rounded-md border ${active ? "border-blue-500 bg-blue-50 dark:bg-blue-950" : "border-slate-200 dark:border-slate-800"}`}>
       <div className="flex items-center">
-        <button onClick={onSelect} aria-pressed={active} aria-label={`${symbol}${extra?.badgeLabel ? `, ${extra.badgeLabel}` : ""}${data ? `, $${data.price.toFixed(2)}, ${up ? "up" : "down"} ${Math.abs(data.change_percent).toFixed(2)} percent today${fromSaved || data.stale ? ", may be outdated" : ""}` : ""}`} className="flex flex-1 items-center justify-between px-3 py-2 text-left">
+        <button data-row-select onClick={onSelect} aria-pressed={active} aria-label={`${symbol}${extra?.badgeLabel ? `, ${extra.badgeLabel}` : ""}${data ? `, $${data.price.toFixed(2)}, ${up ? "up" : "down"} ${Math.abs(data.change_percent).toFixed(2)} percent today${fromSaved || data.stale ? ", may be outdated" : ""}` : ""}`} className="flex flex-1 items-center justify-between px-3 py-2 text-left">
           <span className="font-semibold">
             {symbol}
             {extra?.badge && <span className="ml-2 rounded bg-green-100 px-1.5 py-0.5 text-xs font-medium text-green-900 dark:bg-green-900/50 dark:text-green-200">{extra.badge}</span>}
@@ -65,11 +66,28 @@ export type WatchlistProps = {
 };
 
 export function Watchlist(props: WatchlistProps) {
-  if (props.symbols.length === 0) return <p className="text-sm text-slate-700 dark:text-slate-300">{props.emptyText ?? "This list is empty. Search for a symbol above."}</p>;
+  const list = useRef<HTMLUListElement>(null);
+  const empty = useRef<HTMLParagraphElement>(null);
+  const removedAt = useRef<number | null>(null);
+  const count = props.symbols.length;
+
+  // After a row is removed its button disappears, which would drop keyboard focus to <body>: move it to the row that
+  // took its place (or the previous one), or to the empty-list message.
+  useEffect(() => {
+    const at = removedAt.current;
+    if (at === null) return;
+    removedAt.current = null;
+    if (count === 0) { empty.current?.focus(); return; }
+    const buttons = list.current?.querySelectorAll<HTMLButtonElement>("button[data-row-select]");
+    buttons?.[Math.min(at, count - 1)]?.focus();
+  }, [count]);
+
+  if (count === 0) return <p ref={empty} tabIndex={-1} className="text-sm text-slate-700 outline-offset-2 dark:text-slate-300">{props.emptyText ?? "This list is empty. Search for a symbol above."}</p>;
   return (
-    <ul className="space-y-2" aria-label={props.label}>
-      {props.symbols.map((s) => (
-        <Row key={s} symbol={s} active={s === props.selected} onSelect={() => props.onSelect(s)} onRemove={props.onRemove ? () => props.onRemove?.(s) : undefined} extra={props.extras?.[s]} />
+    <ul ref={list} className="space-y-2" aria-label={props.label}>
+      {props.symbols.map((s, i) => (
+        <Row key={s} symbol={s} active={s === props.selected} onSelect={() => props.onSelect(s)}
+          onRemove={props.onRemove ? () => { removedAt.current = i; props.onRemove?.(s); } : undefined} extra={props.extras?.[s]} />
       ))}
     </ul>
   );

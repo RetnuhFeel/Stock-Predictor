@@ -1,0 +1,50 @@
+# Render Blueprint for the live demo (free plan, Docker). Docs: docs/REFERENCE.md "Render configuration (Blueprint)".
+#
+# NOT applied or validated by Render. It mirrors the two services that already exist (stock-predictor-api and
+# stock-predictor-web). Before linking it (New -> Blueprint) compare names, region and URLs with your dashboard:
+# linking can rename or recreate services. Secrets are `sync: false`, i.e. you type them in the dashboard; never
+# put a secret value in this file.
+#
+# Free tier limits to know: services sleep after ~15 min idle; 750 free instance hours per workspace per month
+# cannot cover two always-on services; a free Render Postgres expires after 30 days (the demo uses Neon instead).
+services:
+  - type: web
+    name: stock-predictor-api
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./backend/Dockerfile   # Blueprint paths are relative to the repo root (rootDir is not used on purpose:
+    dockerContext: ./backend               # Render's docs are ambiguous about whether they are relative to it)
+    buildFilter:
+      paths: [backend/**]
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: CORS_ORIGINS            # exact web origin(s), comma-separated, no trailing slash
+        value: https://stock-predictor-web-ts7p.onrender.com
+      - key: TRUST_PROXY             # Render sits in front of the app: identify clients from X-Forwarded-For
+        value: "true"
+      - key: TRUSTED_PROXY_HOPS      # verified live: 1 enforces the limit; a spoofed X-Forwarded-For does not bypass it
+        value: "1"
+      - key: DATA_PROVIDER
+        value: yfinance
+      - key: DATABASE_URL            # Postgres URL (Neon) for the durable prediction log; unset = ephemeral SQLite
+        sync: false
+      - key: LOG_TASK_TOKEN          # >= 16 chars; same value as the GitHub Actions secret LOG_TASK_TOKEN
+        sync: false
+      - key: ADMIN_TOKEN             # optional, >= 16 chars; enables GET /api/_stats
+        sync: false
+
+  - type: web
+    name: stock-predictor-web
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./web/Dockerfile
+    dockerContext: ./web
+    buildFilter:
+      paths: [web/**]
+    autoDeployTrigger: commit
+    envVars:
+      - key: NEXT_PUBLIC_API_BASE_URL   # inlined into the browser bundle at BUILD time (Docker build arg)
+        value: https://stock-predictor-api-2dnn.onrender.com

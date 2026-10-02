@@ -104,7 +104,7 @@ export function StockPanel({ symbol }: { symbol: string }) {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-xl font-bold">{symbol}</h2>
-        <div className="flex flex-wrap gap-1" role="group" aria-label="History range shown on the chart">{CHART_RANGES.map((r) => (<button key={r.id} className={btn(r.id === range)} aria-pressed={r.id === range} aria-label={r.long} onClick={() => setRange(r.id)}>{r.label}</button>))}</div>
+        <div className="flex flex-wrap gap-1" role="group" aria-label="History range shown on the chart">{CHART_RANGES.map((r) => (<button key={r.id} className={btn(r.id === range)} aria-pressed={r.id === range} aria-label={`${r.label}, ${r.long}`} onClick={() => setRange(r.id)}>{r.label}</button>))}</div>
       </div>
 
       {hist.loading && !hist.data && <p role="status" className="text-sm text-slate-700 dark:text-slate-300">Loading prices…</p>}
@@ -130,7 +130,7 @@ export function StockPanel({ symbol }: { symbol: string }) {
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <span id="horizon-label">Forecast horizon (trading days):</span>
         <div className="flex flex-wrap gap-1" role="group" aria-labelledby="horizon-label">
-          {HORIZONS.map((h) => (<button key={h} className={btn(h === horizon)} aria-pressed={h === horizon} onClick={() => setHorizon(h)}>{h}d</button>))}
+          {HORIZONS.map((h) => (<button key={h} className={btn(h === horizon)} aria-pressed={h === horizon} aria-label={`${h}d, ${h} trading days`} onClick={() => setHorizon(h)}>{h}d</button>))}
         </div>
         {horizon >= 20 && horizon < LONG_HORIZON && <span className="text-xs text-slate-600 dark:text-slate-300">Longer horizons mean wider ranges and fewer independent backtests.</span>}
       </div>

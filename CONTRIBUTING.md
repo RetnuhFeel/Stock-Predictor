@@ -9,7 +9,7 @@ Thanks for your interest! This is a small educational project; issues and pull r
 ```bash
 # backend (Python 3.12+)
 cd backend && python -m venv .venv && source .venv/bin/activate
-pip install -r requirements-dev.txt
+pip install -c requirements.lock -r requirements-dev.txt   # the lockfile pins the exact versions CI and Docker use
 ruff check . && pytest -q          # tests use synthetic data; no network needed
 uvicorn app.main:app --reload --port 8000
 
@@ -18,6 +18,9 @@ cd web && cp .env.example .env.local && npm ci
 npm run dev
 npm run lint && npm run typecheck && npm run build
 ```
+
+Changing backend dependencies: edit `backend/requirements.txt`, then refresh the pinned lockfile with
+`uv pip compile requirements.txt --python-version 3.12 --universal -o requirements.lock` (run in `backend/`) and commit both.
 
 ## Browser checks
 
@@ -37,6 +40,10 @@ cd web/e2e && npm ci && node smoke.mjs      # needs Chrome/Chromium; set CHROME=
 - Web: no new tracking, cookies or third-party calls without discussion; keep UI accessible (keyboard, labels, contrast, not colour alone).
 - Don't touch the legacy iOS app in web/backend PRs.
 - Never commit secrets or real API keys.
+
+## Branch protection (maintainers)
+
+Recommended settings for `master` (a GitHub repository setting; nothing in this repo applies it): require a pull request with at least one approval, require the `backend`, `web` and `web-smoke` status checks to pass and be up to date, block force-pushes and branch deletion. Details in [docs/REFERENCE.md](docs/REFERENCE.md#dependencies-and-repository-settings).
 
 ## Reporting issues
 

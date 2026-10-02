@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import hmac
 import json
 import logging
@@ -7,6 +8,7 @@ import os
 import tempfile
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, wait
 
 import numpy as np
 import pandas as pd
@@ -26,9 +28,11 @@ from .errors import (
     NotFound,
     PayloadTooLarge,
     Unauthorized,
+    UpstreamTimeout,
 )
 from .forecast import forecast
 from .freshness import bar_is_final, describe, describe_fetch, today_ny
+from .marketcal import trading_days_between
 from .models import compare_models
 from .observability import (
     Stats,
@@ -51,6 +55,8 @@ from .volatility import forecast_volatility
 
 log = setup_logging()
 init_sentry(config.SENTRY_DSN, log)
+for _w in config.TOKEN_WARNINGS:
+    log.warning(_w)
 app = FastAPI(title="Stock Predictor API", version="1.2.0",
               description="Educational stock data & experimental forecasts. " + config.DISCLAIMER)
 
@@ -208,12 +214,26 @@ def compare(symbols: str = Query(..., min_length=1, max_length=120), range: str 
     fetched: dict[str, Fetched] = {}
     failed: list[dict] = []
     first_error: ApiError | None = None
-    for sym in syms:
-        try:
-            fetched[sym] = _history(provider, sym, config.RANGES[range])
-        except ApiError as exc:
+    # Parallel fetch under ONE overall deadline: before, 5 slow symbols x (timeout x retries) each could keep a worker
+    # busy for minutes. Late symbols are reported as failed; their downloads still finish and fill the cache.
+    pool = ThreadPoolExecutor(max_workers=len(syms), thread_name_prefix="compare")
+    try:
+        futures = {sym: pool.submit(contextvars.copy_context().run, _history, provider, sym, config.RANGES[range])
+                   for sym in syms}  # copy_context keeps the request id in worker-thread logs
+        wait(futures.values(), timeout=config.COMPARE_DEADLINE_S)
+        for sym, fut in futures.items():
+            if not fut.done():
+                exc: ApiError = UpstreamTimeout("Took too long to fetch this symbol; try again in a moment.")
+            else:
+                try:
+                    fetched[sym] = fut.result()
+                    continue
+                except ApiError as e:
+                    exc = e
             first_error = first_error or exc
             failed.append({"symbol": sym, "code": exc.code, "message": exc.message})
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
     if len(fetched) < 2:
         raise first_error or InvalidRequest("Not enough symbols with data to compare.")
 
@@ -243,13 +263,13 @@ def _require_admin(request: Request) -> None:
         raise Unauthorized("Missing or invalid admin token.")
 
 
-@app.get("/api/_stats")
+@app.get("/api/_stats", include_in_schema=False)
 def get_stats(request: Request):
     _require_admin(request)
     return stats.snapshot()
 
 
-@app.post("/api/_client-error")
+@app.post("/api/_client-error", include_in_schema=False)
 async def client_error(request: Request):
     """Receives sanitized browser error reports (message, stack, route only) and logs them.
     Disabled unless CLIENT_ERROR_LOGGING=true. Size- and rate-limited. Returns 204."""
@@ -305,6 +325,15 @@ def quote(symbol: str, provider: BaseProvider = Depends(get_provider)):
     }
 
 
+def _volume(v) -> int:
+    """Volume as an int; missing/NaN/inf (some providers and some instruments have none) becomes 0, not a 500."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return 0
+    return int(f) if np.isfinite(f) and f > 0 else 0
+
+
 @app.get("/api/history/{symbol}")
 def history(symbol: str, range: str = Query("6mo"), provider: BaseProvider = Depends(get_provider)):
     sym = normalize_symbol(symbol)
@@ -312,7 +341,7 @@ def history(symbol: str, range: str = Query("6mo"), provider: BaseProvider = Dep
         raise InvalidRange(f"range must be one of {sorted(config.RANGES)}")
     got = _history(provider, sym, config.RANGES[range])
     df = got.value
-    pts = [{"date": d.strftime("%Y-%m-%d"), "close": round(float(r.Close), 4), "volume": int(r.Volume or 0)}
+    pts = [{"date": d.strftime("%Y-%m-%d"), "close": round(float(r.Close), 4), "volume": _volume(r.Volume)}
            for d, r in df.iterrows()]
     return {"symbol": sym, "range": range, "points": pts, **_freshness(df, got)}
 
@@ -517,7 +546,7 @@ def _require_task_token(request: Request) -> None:
         raise Unauthorized("Missing or invalid task token.")
 
 
-@app.post("/api/_tasks/run-prediction-log")
+@app.post("/api/_tasks/run-prediction-log", include_in_schema=False)
 def run_prediction_log(request: Request, provider: BaseProvider = Depends(get_provider),
                        store: PredictionStore = Depends(get_store)):
     """Scheduled job (GitHub Actions): log today's predictions for the fixed allowlist, then resolve old ones.
@@ -531,7 +560,7 @@ def run_prediction_log(request: Request, provider: BaseProvider = Depends(get_pr
             skipped.append({"symbol": sym, "reason": exc.code})
             continue
         base = df.index[-1].date()
-        lag = int(np.busday_count(base, today_ny()))
+        lag = trading_days_between(base, today_ny())
         if hist.stale or lag > 1:
             # Stale data could mean the outcome is already known (hindsight), so it is never logged.
             # At most one business day behind: the previous session's close on a normal morning/weekend run.
@@ -541,7 +570,7 @@ def run_prediction_log(request: Request, provider: BaseProvider = Depends(get_pr
             # Today's bar before the close is a partial intraday value, not a close: never log a base from it.
             skipped.append({"symbol": sym, "reason": "PARTIAL_BAR"})
             continue
-        if store.add_prediction(record_from_forecast(result, df["Close"])):
+        if store.add_prediction(record_from_forecast(result)):
             logged.append(sym)
         else:
             skipped.append({"symbol": sym, "reason": "ALREADY_LOGGED"})

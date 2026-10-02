@@ -10,16 +10,15 @@ import logging
 import numpy as np
 import pandas as pd
 
-from . import config
-from .forecast import MIN_INDEPENDENT_TESTS, skill_ci_sq
+from .forecast import MIN_INDEPENDENT_TESTS, ratio, skill_ci_sq
 from .freshness import bar_is_final
 from .observability import log_event
-from .storage import HASH_FIELDS, PredictionStore
+from .storage import HASH_FIELDS, RES_FIELDS, PredictionStore
 
 log = logging.getLogger("stock-api")
 
 
-def record_from_forecast(result: dict, base_close_series: pd.Series) -> dict:
+def record_from_forecast(result: dict) -> dict:
     bt = result["backtest"]
     return {
         "symbol": result["symbol"], "horizon_days": result["horizon_days"],
@@ -82,7 +81,7 @@ def scorecard(rows: list[dict], horizon: int | None = None) -> dict:
     by_date = {d: [i for i, r in enumerate(res) if r["base_date"] == d] for d in dates}
     m_sq = np.array([np.mean((real[ix] - pred[ix]) ** 2) for ix in by_date.values()])
     b_sq = np.array([np.mean(real[ix] ** 2) for ix in by_date.values()])
-    skill = 1 - float(np.sqrt(m_sq.mean() / b_sq.mean()))
+    skill = 1 - ratio(float(np.sqrt(m_sq.mean())), float(np.sqrt(b_sq.mean())))
     n_indep = max(len(dates) // h, 1)
     out = {**base, "n_dates": len(dates), "n_independent": n_indep, "horizon_days": h,
            "skill_vs_naive": skill, "model_rmse": float(np.sqrt(np.mean((real - pred) ** 2))),
@@ -128,10 +127,6 @@ def hash_spec() -> dict:
         "res_hash": "sha256(res_prev_hash + entry_hash + json.dumps([row[f] for f in outcome_fields], "
                     "separators=(',',':'), default=str)); res_seq counts 1,2,3... in resolution order, "
                     "res_prev_hash is the previous sealed outcome's res_hash (genesis for res_seq 1)",
-        "outcome_fields": list(("status", "resolved_at", "realized_date", "realized_close", "realized_return")),
+        "outcome_fields": list(RES_FIELDS),
         "note": "Rows resolved before outcome seals existed have null res_* fields (reported as unsealed_resolved).",
     }
-
-
-def log_symbols() -> list[str]:
-    return list(config.LOG_SYMBOLS)

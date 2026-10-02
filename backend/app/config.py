@@ -44,12 +44,30 @@ STALE_MAX_AGE_S = int(os.getenv("STALE_MAX_AGE_S", "86400"))
 
 NEWS_TTL_S = int(os.getenv("NEWS_TTL_S", "600"))
 MAX_COMPARE_SYMBOLS = 5
+# Overall time budget for one /api/compare request (symbols are fetched in parallel). Symbols still running when it
+# expires are reported under "failed" (UPSTREAM_TIMEOUT) and the rest are returned; their downloads finish in the
+# background and warm the cache.
+COMPARE_DEADLINE_S = float(os.getenv("COMPARE_DEADLINE_S", "30"))
 
 # --- observability (all optional / off by default; no IPs, no user data are ever logged) ---
 LOG_FORMAT = os.getenv("LOG_FORMAT", "json").lower()  # "json" (default) or "text"
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 # Enables GET /api/_stats (Bearer token). Unset/empty = endpoint disabled (404).
-ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
+MIN_TOKEN_LEN = 16
+TOKEN_WARNINGS: list[str] = []
+
+
+def _token(name: str) -> str:
+    """A bearer token from the environment. One shorter than MIN_TOKEN_LEN is guessable, so the endpoint it
+    protects stays DISABLED (404) rather than being guarded by a weak secret. A warning is logged (never the value)."""
+    value = os.getenv(name, "")
+    if value and len(value) < MIN_TOKEN_LEN:
+        TOKEN_WARNINGS.append(f"{name} is shorter than {MIN_TOKEN_LEN} characters and was ignored (endpoint disabled).")
+        return ""
+    return value
+
+
+ADMIN_TOKEN = _token("ADMIN_TOKEN")
 # Enables POST /api/_client-error, which logs sanitized browser error reports. Off by default.
 CLIENT_ERROR_LOGGING = os.getenv("CLIENT_ERROR_LOGGING", "").lower() in {"1", "true", "yes"}
 CLIENT_ERROR_RATE_PER_MIN = int(os.getenv("CLIENT_ERROR_RATE_PER_MIN", "10"))
@@ -79,7 +97,7 @@ TRENDING_MAX_LIMIT = 10
 LOG_SYMBOLS = ["SPY", "AAPL", "MSFT", "NVDA", "TSLA"]
 LOG_HORIZON = 5
 # Protects POST /api/_tasks/run-prediction-log. Unset/empty = endpoint disabled (404).
-LOG_TASK_TOKEN = os.getenv("LOG_TASK_TOKEN", "")
+LOG_TASK_TOKEN = _token("LOG_TASK_TOKEN")
 # SQLite file by default; set DATABASE_URL (e.g. a Postgres URL) for storage that survives redeploys.
 # On Render's free tier the container disk is EPHEMERAL: a SQLite log is lost on every redeploy/restart.
 DATABASE_URL = os.getenv("DATABASE_URL", "")

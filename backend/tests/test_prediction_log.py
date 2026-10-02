@@ -372,7 +372,7 @@ def test_every_value_the_logger_writes_fits_its_column(client, task, store, fake
         result = {"symbol": "X" * 15, "horizon_days": 5, "last_date": "2026-09-30", "last_close": 1.0,
                   "predicted_return": 0.01, "interval_80": {"low": 0.9, "high": 1.1},
                   "backtest": {"skill_vs_baseline": 0.0, "beats_baseline": beats}}
-        _assert_fits([record_from_forecast(result, None)])
+        _assert_fits([record_from_forecast(result)])
     # end to end: what the scheduled task actually stores, before and after resolution
     client.post("/api/_tasks/run-prediction-log", headers=task)
     rows = store.all_rows()

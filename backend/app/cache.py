@@ -93,10 +93,10 @@ class TTLCache:
                 if isinstance(flight.error, UpstreamError) and hit and now - hit[1] <= stale_max_age:
                     return Fetched(hit[2], hit[1], True)
                 raise flight.error
-            return self._load(key, ttl, factory, stale_max_age, hit, now, register=False)  # leader hung: go alone
-        return self._load(key, ttl, factory, stale_max_age, hit, now, register=True, flight=flight)
+            return self._load(key, ttl, factory, stale_max_age, hit, now)  # leader hung: go alone
+        return self._load(key, ttl, factory, stale_max_age, hit, now, flight=flight)
 
-    def _load(self, key, ttl, factory, stale_max_age, hit, now, *, register: bool, flight: _Flight | None = None):
+    def _load(self, key, ttl, factory, stale_max_age, hit, now, *, flight: _Flight | None = None):
         try:
             value = factory()  # outside the lock: network calls can be slow
         except BaseException as exc:
@@ -117,9 +117,6 @@ class TTLCache:
                 with self._lock:
                     self._flights.pop(key, None)
                 flight.done.set()
-
-    def get_or_set(self, key: Any, ttl: float, factory: Callable[[], Any]) -> Any:
-        return self.fetch(key, ttl, factory).value
 
     def clear_prefix(self, prefix: str) -> None:
         """Drop entries whose key is a tuple starting with ``prefix``."""

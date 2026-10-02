@@ -73,7 +73,7 @@ const settle = (page) => page.waitForLoadState("networkidle").catch(() => {});
 
   // horizon switch: request uses new horizon and the verdict heading follows it
   const waitFc = page.waitForResponse((r) => r.url().includes("/api/forecast/") && r.url().includes("horizon=20"), { timeout: 90000 });
-  await page.getByRole("button", { name: "20d", exact: true }).click();
+  await page.getByRole("button", { name: "20d, 20 trading days", exact: true }).click();
   const r = await waitFc;
   const body = await r.json();
   ok(r.status() === 200 && body.horizon_days === 20, "horizon=20 request returns a 20-day forecast");
@@ -81,7 +81,7 @@ const settle = (page) => page.waitForLoadState("networkidle").catch(() => {});
   await page.getByText("(20-trading-day forecasts)").waitFor({ timeout: 30000 });
   ok(true, "plain-language backtest heading follows chosen horizon");
   ok((await page.locator("[aria-labelledby=bt-title]").innerText()).match(/guessing|Inconclusive/i) !== null, "plain-language verdict shown for horizon 20");
-  ok((await page.getByRole("button", { name: "20d", exact: true }).getAttribute("aria-pressed")) === "true", "horizon button aria-pressed");
+  ok((await page.getByRole("button", { name: "20d, 20 trading days", exact: true }).getAttribute("aria-pressed")) === "true", "horizon button aria-pressed");
   // invalid horizon rejected by the backend
   const bad = await page.evaluate(async (base) => (await fetch(`${base}/api/forecast/AAPL?horizon=999`)).status, process.env.API || "http://localhost:8000");
   ok(bad === 422 || bad === 400, `backend rejects horizon=999 (${bad})`);

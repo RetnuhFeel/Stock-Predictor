@@ -5,14 +5,21 @@ name: Log and resolve predictions
 # Needs two repository settings (nothing is stored in the repo):
 #   Secrets  -> LOG_TASK_TOKEN   (must equal the LOG_TASK_TOKEN env var on the API service)
 #   Variables -> API_BASE_URL    (e.g. https://stock-predictor-api-2dnn.onrender.com)
-# If either is missing the job exits successfully with a notice, so forks don't fail.
-# GitHub scheduled runs can be delayed or skipped, and are disabled after 60 days without repo activity.
+# If either is missing: on forks the job exits successfully with a warning annotation (forks have no such secrets);
+# on the upstream repo (RetnuhFeel/Stock-Predictor) it FAILS, so a lost secret cannot go unnoticed.
+# The job is also red when the API answers 200 but recorded nothing (every symbol skipped for a reason other than
+# ALREADY_LOGGED, e.g. the data provider is down): see .github/scripts/check-prediction-log-result.sh.
+# GitHub scheduled runs are best-effort: they can be delayed or dropped, and are disabled after 60 days without repo
+# activity (re-enable in the Actions tab). A missed day leaves a gap in the track record; it is not back-filled,
+# because predictions are only logged from a final close and never from stale data. Trigger it manually
+# (workflow_dispatch) if you notice a gap on the same day.
 on:
   schedule:
     - cron: "30 22 * * 1-5"   # 22:30 UTC = 6:30pm EDT / 5:30pm EST, after the 4pm ET close
   workflow_dispatch:
 
-permissions: {}
+permissions:
+  contents: read   # only to check out the small result-checking script
 
 concurrency:
   group: prediction-log
@@ -26,11 +33,19 @@ jobs:
       API_BASE_URL: ${{ vars.API_BASE_URL }}
       LOG_TASK_TOKEN: ${{ secrets.LOG_TASK_TOKEN }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
       - name: Call the prediction-log task
         shell: bash
         run: |
           if [ -z "$API_BASE_URL" ] || [ -z "$LOG_TASK_TOKEN" ]; then
-            echo "::notice::API_BASE_URL variable and/or LOG_TASK_TOKEN secret not set; nothing to do."
+            if [ "$GITHUB_REPOSITORY" = "RetnuhFeel/Stock-Predictor" ]; then
+              echo "::error::API_BASE_URL variable and/or LOG_TASK_TOKEN secret is not set on the upstream repo."
+              exit 1
+            fi
+            echo "::warning::API_BASE_URL variable and/or LOG_TASK_TOKEN secret not set (fork?); nothing to do."
             exit 0
           fi
           url="${API_BASE_URL%/}/api/_tasks/run-prediction-log"
@@ -39,7 +54,10 @@ jobs:
             code=$(curl -sS -o /tmp/out.json -w '%{http_code}' -m 120 -X POST \
               -H "Authorization: Bearer $LOG_TASK_TOKEN" "$url" || echo 000)
             echo "attempt $attempt: HTTP $code"
-            [ "$code" = "200" ] && { cat /tmp/out.json; echo; exit 0; }
+            if [ "$code" = "200" ]; then
+              cat /tmp/out.json; echo
+              exec .github/scripts/check-prediction-log-result.sh /tmp/out.json
+            fi
             [ "$code" = "401" ] || [ "$code" = "404" ] && { echo "::error::Task rejected (HTTP $code): check LOG_TASK_TOKEN on both sides."; cat /tmp/out.json; exit 1; }
             sleep 30
           done
