@@ -26,6 +26,8 @@ from .forecast import (
     fold_schedule,
     make_features,
     not_enough_history,
+    ratio,
+    require_price_variation,
     skill_ci_sq,
 )
 
@@ -102,6 +104,7 @@ def build_context(close: pd.Series, horizon: int) -> Context:
     close = close[close > 0]
     if len(close) < MIN_ROWS:
         raise InsufficientData(f"Need at least {MIN_ROWS} daily bars, got {len(close)}")
+    require_price_variation(close)
     logp = np.log(close)
     feats = make_features(close)
     ewm = logp.diff().ewm(halflife=EWMA_HALFLIFE, adjust=False).mean().rename("ewm")
@@ -128,7 +131,7 @@ def compare_models(close: pd.Series, horizon: int, n_folds: int = 6) -> dict:
         pred = np.concatenate([model.predict(ctx, te, test) for te, test in folds])
         m = _metrics(y_true, pred)
         is_naive = model.name == "naive"
-        skill = 0.0 if is_naive else 1 - m["rmse"] / float(np.sqrt(base_sq.mean()))
+        skill = 0.0 if is_naive else 1 - ratio(m["rmse"], float(np.sqrt(base_sq.mean())))
         ci = (0.0, 0.0) if is_naive else skill_ci_sq((y_true - pred) ** 2, base_sq, horizon)
         too_few = n_indep < MIN_INDEP_FOR_VERDICT
         beats = bool((not is_naive) and skill > 0.02 and ci[0] > 0 and not too_few)

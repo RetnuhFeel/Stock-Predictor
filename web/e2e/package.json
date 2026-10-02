@@ -2,7 +2,7 @@
   "name": "stock-predictor-e2e",
   "private": true,
   "type": "module",
-  "description": "Optional headless-browser checks (not run in CI). See README.",
+  "description": "Headless-browser checks: smoke.mjs (offline, mocked API) is what CI runs; run.mjs and screenshots.mjs are optional and need a real backend. See CONTRIBUTING.md.",
   "scripts": { "test": "node run.mjs", "smoke": "node smoke.mjs", "screenshots": "node screenshots.mjs" },
   "dependencies": { "axe-core": "^4.10.0", "playwright-core": "^1.50.0" }
 }

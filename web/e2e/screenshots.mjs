@@ -51,14 +51,14 @@ const shot = (page, name, opts = {}) => page.screenshot({ path: `${OUT}/${name}`
   await page.getByRole("combobox", { name: "List", exact: true }).selectOption("default");
   await page.getByText(/Experimental \d+-day estimate/).waitFor({ timeout: 120000 });
   const grp = page.getByRole("group", { name: "History range shown on the chart" });
-  await grp.getByRole("button", { name: "2 years", exact: true }).click();
+  await grp.getByRole("button", { name: "2Y, 2 years", exact: true }).click();
   await page.getByText(/Return over 2 years/).waitFor({ timeout: 120000 });
   await page.waitForTimeout(800);
   const top = page.locator("h2", { hasText: /^[A-Z.]+$/ }).first();
   await top.scrollIntoViewIfNeeded(); await page.waitForTimeout(300);
   const box = await page.locator("main").boundingBox();
   await page.screenshot({ path: `${OUT}/chart-range-light.png`, clip: { x: box.x, y: Math.max(box.y, 0), width: box.width, height: 640 } });
-  await page.getByRole("button", { name: "256d", exact: true }).click();
+  await page.getByRole("button", { name: "256d, 256 trading days", exact: true }).click();
   await page.getByText(/Long-horizon forecasts \(256 trading days/).waitFor({ timeout: 120000 });
   await page.getByText(/Experimental 256-day estimate/).waitFor({ timeout: 120000 });
   const note = page.getByRole("note").filter({ hasText: "Long-horizon forecasts" });
@@ -150,7 +150,7 @@ for (const scheme of ["light", "dark"]) {
   await page.locator("section[aria-labelledby=bt-title]").scrollIntoViewIfNeeded(); await page.waitForTimeout(300); await frame(3.5);
   await page.evaluate(() => window.scrollTo(0, 0));
   const w = page.waitForResponse((r) => r.url().includes("horizon=20"), { timeout: 120000 });
-  await page.getByRole("button", { name: "20d", exact: true }).click(); await w;
+  await page.getByRole("button", { name: "20d, 20 trading days", exact: true }).click(); await w;
   await page.getByText("(20-trading-day forecasts)").waitFor(); await page.waitForTimeout(500);
   await page.locator("section[aria-labelledby=bt-title]").scrollIntoViewIfNeeded(); await page.waitForTimeout(300); await frame(3.5);
   await page.evaluate(() => window.scrollTo(0, 0));

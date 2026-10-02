@@ -35,7 +35,7 @@ export function AlertsPanel({ symbol }: { symbol: string | null }) {
 
   return (
     <section aria-labelledby="alerts-title" className="space-y-3 rounded-md border border-slate-300 p-3 dark:border-slate-700">
-      <h2 id="alerts-title" className="font-semibold">Price alerts</h2>
+      <h2 id="alerts-title" tabIndex={-1} className="font-semibold outline-offset-2">Price alerts</h2>
       <p className="text-xs text-slate-600 dark:text-slate-300">
         Alerts are saved only on this device and <strong>only fire while this app is open</strong> (checked about once a minute).
         There is no push server, so you won&apos;t be notified when it&apos;s closed.
@@ -74,7 +74,7 @@ export function AlertsPanel({ symbol }: { symbol: string | null }) {
               </span>
               <span className="flex gap-2 text-xs">
                 {a.triggeredAt && <button onClick={() => rearmAlert(a.id)} className="underline">Re-arm</button>}
-                <button onClick={() => removeAlert(a.id)} className="underline" aria-label={`Remove alert ${describeAlert(a)}`}>Remove</button>
+                <button onClick={() => { removeAlert(a.id); setTimeout(() => document.getElementById("alerts-title")?.focus(), 0); /* clicked button is gone: keep focus in the panel */ }} className="underline" aria-label={`Remove alert ${describeAlert(a)}`}>Remove</button>
               </span>
             </li>
           ))}

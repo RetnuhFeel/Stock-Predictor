@@ -1,11 +1,20 @@
 name: Keep Render services awake
 
-# Free Render services sleep after ~15 min without traffic. Pinging them every 10 minutes keeps
-# them warm. Notes: GitHub scheduled runs can be delayed or skipped under load, and GitHub disables
-# scheduled workflows after 60 days without repository activity (re-enable in the Actions tab).
+# Free Render services sleep after ~15 min without traffic, and a cold start takes about a minute.
+# This workflow pings both of them to reduce cold starts. It is a best-effort courtesy, NOT a guarantee:
+#  * GitHub's scheduler is best-effort. A "*/10" cron rarely fires every 10 minutes: runs are routinely delayed by
+#    several minutes and sometimes dropped, especially at the top of the hour (so the minutes below are off-peak).
+#    Gaps longer than 15 minutes happen, and then Render sleeps the service anyway.
+#  * GitHub disables scheduled workflows after 60 days without repository activity (re-enable in the Actions tab).
+#  * Render's free tier has 750 instance hours per workspace per month (no rollover). One always-on service uses
+#    ~744 h in a 31-day month, so two always-on services (~1,488 h) cannot both stay up all month. When the hours run
+#    out Render suspends every free web service in the workspace until the next month. If you need both services
+#    up 24/7, use a paid instance for at least one of them, or ping only the API (the web app is static-ish and
+#    tolerates a slow first load better than the API does).
+# Misses are annotations only; the run never fails.
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "7,17,27,37,47,57 * * * *"   # every ~10 min, but off the :00/:30 marks where GitHub is busiest
   workflow_dispatch:
 
 permissions: {}

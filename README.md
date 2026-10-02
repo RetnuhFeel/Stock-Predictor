@@ -20,7 +20,7 @@ Every forecast ships with a walk-forward backtest against the "price stays flat"
 
 > ⚠️ **Educational/experimental only. Not financial advice. No warranty. Predictions are frequently wrong.** No personalised advice is given and this project does not hold or trade money. The [Terms](web/app/terms/page.tsx) and [Privacy](web/app/privacy/page.tsx) pages are draft templates that need review by a lawyer before you run a public service.
 
-> ⏳ **Free-tier cold start:** the demo runs on Render's free plan, which sleeps after ~15 minutes idle. The first request can take up to a minute; the app shows a "Waking up the server…" banner and retries automatically.
+> ⏳ **Free-tier cold start:** the demo runs on Render's free plan, which sleeps after ~15 minutes idle. The first request can take up to a minute; the app shows a "Waking up the server…" banner and retries automatically. A GitHub Actions ping reduces cold starts but is best-effort, and Render's 750 free hours/month cannot keep two services awake all month (details in [docs/REFERENCE.md](docs/REFERENCE.md#live-demo-on-render-free-tier)).
 
 ## Why this exists
 
@@ -121,7 +121,7 @@ StockAnalyzerApp/   Legacy iOS app (see below)
 - Web-side Sentry (documented as a follow-up to avoid bundle bloat).
 - A licensed data provider for production use.
 - Offline evaluation of pretrained time-series models (Chronos, TimesFM) with the same walk-forward harness; they are intentionally not in the API (too heavy for a free instance).
-- Durable prediction-log storage (Postgres) and a longer live history.
+- A longer live history (durable Postgres storage is already supported and used by the live demo).
 
 ## Contributing, security, support
 

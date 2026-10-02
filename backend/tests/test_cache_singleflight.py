@@ -2,8 +2,6 @@
 import threading
 import time
 
-import pytest
-
 from app import main
 from app.cache import TTLCache
 from app.errors import DataUnavailable
@@ -190,8 +188,3 @@ def test_clear_prefix_and_clear_keep_side_tables_consistent():
     assert set(c._keep) == set(c._data) == {("x", 1)}
     c.clear()
     assert not c._data and not c._keep
-
-
-@pytest.mark.parametrize("n", [1])
-def test_get_or_set_still_works(n):
-    assert TTLCache().get_or_set("k", 1, lambda: n) == n

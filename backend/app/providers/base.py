@@ -58,6 +58,7 @@ class BaseProvider(ABC):
     def quote(self, symbol: str) -> dict:
         df = self.history(symbol, "5d")
         close = df["Close"].dropna()
+        close = close[close > 0]  # a zero/negative bar is bad data, and would divide by zero in the % change
         if len(close) < 2:
             raise DataUnavailable("Not enough recent data to build a quote", retryable=True)
         price, prev = float(close.iloc[-1]), float(close.iloc[-2])

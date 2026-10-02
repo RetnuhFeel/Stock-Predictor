@@ -40,6 +40,8 @@ from .forecast import (
     SEED,
     fold_schedule,
     make_features,
+    ratio,
+    require_price_variation,
     skill_ci_sq,
     walk_forward,
 )
@@ -179,11 +181,11 @@ def _score_gain_ci(new: np.ndarray, base: np.ndarray, level: float = 0.90) -> tu
     >= horizon days apart, so they are close to independent)."""
     rng = np.random.default_rng(SEED)
     n = len(new)
-    gain = 1 - new.mean() / base.mean()
+    gain = 1 - ratio(new.mean(), base.mean())
     boots = np.empty(N_BOOT)
     for i in range(N_BOOT):
         idx = rng.integers(0, n, n)
-        boots[i] = 1 - new[idx].mean() / base[idx].mean()
+        boots[i] = 1 - ratio(new[idx].mean(), base[idx].mean())
     lo, hi = np.quantile(boots, [(1 - level) / 2, 1 - (1 - level) / 2])
     return float(gain), float(lo), float(hi)
 
@@ -290,7 +292,7 @@ def backtest(close: pd.Series, horizon: int) -> dict:
             {"score_gain_vs_baseline": gain, "score_gain_ci_90": [lo, hi], "verdict": _verdict(gain, lo, hi)}
         )
     e_base, e_spike = (a["y"] - a["pred"]) ** 2, (a["y"] - a["smed"]) ** 2
-    skill = 1 - float(np.sqrt(e_spike.mean() / e_base.mean()))
+    skill = 1 - ratio(float(np.sqrt(e_spike.mean())), float(np.sqrt(e_base.mean())))
     ci = skill_ci_sq(e_spike, e_base, 1)
     out["point"] = {
         "baseline_rmse": float(np.sqrt(e_base.mean())),
@@ -343,6 +345,7 @@ def spike_forecast(close: pd.Series, horizon: int, base: dict) -> dict:
     close = close[close > 0]
     if len(close) < MIN_ROWS:
         raise InsufficientData(f"Need at least {MIN_ROWS} daily bars, got {len(close)}")
+    require_price_variation(close)
     logret = np.log(close).diff().dropna().to_numpy()
     cal = calibrate(logret)
     last = float(base["last_close"])

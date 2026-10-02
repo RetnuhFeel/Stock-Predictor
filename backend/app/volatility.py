@@ -21,6 +21,8 @@ from .forecast import (
     MIN_ROWS,
     fold_schedule,
     not_enough_history,
+    ratio,
+    require_price_variation,
     skill_ci_sq,
 )
 
@@ -71,6 +73,7 @@ def forecast_volatility(close: pd.Series, horizon: int, n_folds: int = 6) -> dic
     close = close[close > 0]
     if len(close) < MIN_ROWS:
         raise InsufficientData(f"Need at least {MIN_ROWS} daily bars, got {len(close)}")
+    require_price_variation(close)
     feats, label = _dataset(close, horizon)
     data = feats.join(label).dropna()
     if len(data) < 150:
@@ -101,7 +104,7 @@ def forecast_volatility(close: pd.Series, horizon: int, n_folds: int = 6) -> dic
     for name, p in preds.items():
         sq = (np.log(p) - log_actual) ** 2
         is_naive = name == "naive"
-        skill = 0.0 if is_naive else 1 - float(np.sqrt(sq.mean() / base_sq.mean()))
+        skill = 0.0 if is_naive else 1 - ratio(float(np.sqrt(sq.mean())), float(np.sqrt(base_sq.mean())))
         ci = (0.0, 0.0) if is_naive else skill_ci_sq(sq, base_sq, horizon)
         too_few = n_indep < MIN_INDEP_FOR_VERDICT
         beats = bool((not is_naive) and skill > 0.02 and ci[0] > 0 and not too_few)

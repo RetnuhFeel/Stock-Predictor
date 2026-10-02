@@ -9,7 +9,7 @@ flowchart LR
     subgraph Browser["Browser (PWA)"]
         UI["Next.js UI<br/>lists · forecast · compare · /model"]
         LS[("localStorage<br/>lists, alerts,<br/>last-good data")]
-        SW["Service worker<br/>app shell + static assets only"]
+        SW["Service worker<br/>app shell + static assets only<br/>(never /api, never errors)"]
         UI <--> LS
         UI --- SW
     end
@@ -17,15 +17,15 @@ flowchart LR
     UI -- "fetch JSON<br/>(CORS)" --> API
 
     subgraph Backend["FastAPI backend"]
-        API["Routes<br/>quote · history · forecast ·<br/>compare · news · model-report"]
-        MW["Middleware<br/>request ID · rate limit ·<br/>JSON logs · aggregate stats"]
-        CACHE[("TTL cache<br/>stale-if-error")]
+        API["Routes<br/>quote · history · forecast ·<br/>compare (parallel, deadline) · news · model-report ·<br/>trending · timeline · spikes"]
+        MW["Middleware<br/>request ID · rate limit (per client) ·<br/>JSON logs · aggregate stats"]
+        CACHE[("TTL cache<br/>stale-if-error · single-flight")]
         PROV["Provider interface"]
         FC["Forecast pipeline<br/>features → model → intervals"]
         BT["Backtest<br/>walk-forward + embargo<br/>vs. naive baseline<br/>+ block bootstrap CI"]
         MOD["Model comparison + volatility<br/>naive · drift · EWMA · ridge-AR · GBM<br/>same walk-forward harness"]
         LOG["Prediction log<br/>fixed tickers, scheduled only<br/>hash-chained rows"]
-        DB[("SQLite (ephemeral on free tier)<br/>or Postgres via DATABASE_URL")]
+        DB[("Postgres via DATABASE_URL (live demo: Neon)<br/>or SQLite (default, ephemeral on free tier)")]
         API --> MW
         API --> CACHE
         CACHE --> PROV
@@ -79,11 +79,13 @@ sequenceDiagram
 | Web app | `web/` | Next.js App Router, static pages + client components; all data fetched from the API |
 | API | `backend/app/main.py` | Thin routes; errors are `{"error": {code, message, retryable, retry_after}}` |
 | Provider abstraction | `backend/app/providers/` | `BaseProvider` (`history`, `search`, `news`); `create_provider(DATA_PROVIDER)` |
-| Cache | `backend/app/cache.py` | In-memory TTL cache, stale-if-error up to `STALE_MAX_AGE_S`; single-process |
+| Cache | `backend/app/cache.py` | In-memory TTL cache, stale-if-error up to `STALE_MAX_AGE_S`; concurrent misses for one key share a single provider call (single-flight); single-process |
+| Rate limiter | `backend/app/ratelimit.py` | In-memory sliding window per client key (`X-Forwarded-For` entry `TRUSTED_PROXY_HOPS` from the right when `TRUST_PROXY=true`); extra stricter buckets for heavy endpoints and client-error reports |
+| Market calendar | `backend/app/marketcal.py` | Built-in NYSE holiday rules (2015–2040, best effort, no early closes). Used for forecast date labels, the data-age check and the prediction-log hindsight guard |
 | Freshness | `backend/app/freshness.py` | `data_as_of`, `fetched_at`, `is_delayed`, `stale`, `warnings` |
 | Forecast + backtest | `backend/app/forecast.py` | Gradient boosting on simple features; walk-forward CV; bootstrap CI |
 | Model report | `GET /api/model-report` | Fixed ticker list and horizon, cached 6 h, own rate limit, builds serialised |
-| Trending | `backend/app/universe.py`, `GET /api/trending` | Fixed ~106-ticker universe, one batched provider download, close-to-close return over N days, cached with stale-if-error. A momentum screen, not a prediction |
+| Trending | `backend/app/universe.py`, `GET /api/trending` | Fixed ~106-ticker universe (`502 DATA_UNAVAILABLE` if coverage is too low), one batched provider download, close-to-close return over N days, cached with stale-if-error. A momentum screen, not a prediction |
 | Chart history | `GET /api/timeline/{symbol}` | Windows (1M–5Y) for the main chart cut from the single cached 5y history, downsampled with extremes kept, summary from full data |
 | Spike scenario (experimental) | `backend/app/spikes.py`, `GET /api/spikes/{symbol}` | Jump-diffusion Monte Carlo (seeded) calibrated from the ticker's own jumps, clamped to the standard forecast band, backtested walk-forward against the standard interval. Separate from the scored prediction log |
 | Model comparison | `backend/app/models.py`, `GET /api/compare-models/{symbol}` | Five models behind one interface, same walk-forward harness, per-model skill vs. naive with bootstrap CI |
@@ -103,7 +105,7 @@ sequenceDiagram
 
 **Backtest vs. live evidence.** Backtests (even careful ones) are researcher-controlled: models and settings get tweaked after seeing results. So the app keeps a separate live prediction log: forecasts for a fixed ticker list are stored *before* the outcome exists, never edited (only the outcome is filled in once, and sealed on a second hash chain), hash-chained, and scored separately with no verdict until there are enough independent periods. The UI never presents backtest numbers as live results. Several models are compared, so the UI warns that one "win" can be luck.
 
-**Why a storage abstraction.** Render's free disk is ephemeral. SQLAlchemy Core lets the same code run on a SQLite file (default, zero setup, lost on redeploy) or Postgres (`DATABASE_URL`, durable), and the page tells visitors which one is in use.
+**Why a storage abstraction.** Render's free disk is ephemeral. SQLAlchemy Core lets the same code run on a SQLite file (default, zero setup, lost on redeploy) or Postgres (`DATABASE_URL`, durable; the live demo runs on Postgres), and the page tells visitors which one is in use.
 
 **Privacy by construction.** No accounts or cookies; lists and alerts stay on the device. Server logs omit IPs, user agents and query strings; stats are in-memory aggregates behind an admin token; client error reports are opt-in, sanitised, size- and rate-limited.
 

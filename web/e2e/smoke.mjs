@@ -36,6 +36,7 @@ async function mockApi(context) {
     if (p.startsWith("/api/history/")) return json({ symbol: p.split("/").pop(), range: "6mo", points: dates.map((d, i) => ({ date: d, close: closes[i], volume: 1000 })), ...fresh });
     if (p.startsWith("/api/forecast/")) { const h = Number(u.searchParams.get("horizon") || 5);
       return json({ symbol: p.split("/").pop(), horizon_days: h, last_close: 124, last_date: "2026-09-30", predicted_return: 0.01, predicted_price: 125.2, interval_80: { low: 118, high: 131 }, interval_calibrated: h < 120, path: fcPath, backtest: mkBacktest(h), notes: ["Interval is empirical."], disclaimer: "Educational only.", ...fresh }); }
+    if (p === "/api/search") return json({ results: [{ symbol: "AAPL", name: "Apple Inc.", exchange: "NMS" }, { symbol: "AMD", name: "Advanced Micro Devices", exchange: "NMS" }] });
     if (p.startsWith("/api/news/")) return json({ symbol: "AAPL", items: [{ headline: "Example headline", source: "Wire", url: "https://example.com/a", published_at: "2026-09-30T13:00:00Z" }], note: "context", ...fresh });
     if (p === "/api/compare") return json({ range: "6mo", dates: ["2026-04-01", "2026-09-30"], series: ["AAPL", "MSFT", "NVDA"].map((s, i) => ({ symbol: s, start_price: 100, end_price: 110 + i, change_percent: 10 + i, points: [0, 10 + i] })), failed: [], base: "Percent change.", ...fresh });
     if (p === "/api/model-report") return json({ horizon_days: 5, rows: [row("SPY", "not_better"), row("AAPL", "inconclusive"), row("MSFT", "better")], failed: [], method: "walk-forward",
@@ -49,10 +50,10 @@ async function mockApi(context) {
       return json({ symbol: p.split("/").pop(), horizon_days: h, last_close: 124, headline_model: "ewma", forecast_daily_vol: 0.012, annualized_vol: 0.19, horizon_vol: 0.027,
         risk_range: { one_sigma_pct: 2.7, low: 120.7, high: 127.4, nominal_coverage: 0.68, backtest_coverage: 0.72 }, verdict: "inconclusive", skill_vs_naive: 0.01, skill_ci_90: [-0.04, 0.06],
         models: [vm("naive", "baseline", 0), vm("ewma", "inconclusive", 0.01)], n_test_points: 600, n_independent_tests: 120, small_sample: false, embargo_days: h, method: "wf", notes: ["Fat tails exist."], disclaimer: "Educational only.", ...fresh }); }
-    if (p === "/api/trending") { if (globalThis.__trendingFail) return json({ error: { code: "DATA_UNAVAILABLE", message: "x", retryable: true } }, 503);
+    if (p === "/api/trending") { if (globalThis.__trendingFail) return json({ error: { code: "DATA_UNAVAILABLE", message: "x", retryable: true } }, 502);
       return json({ days: 3, limit: 5, items: [["AAPL", "Apple Inc.", 6.1], ["NVDA", "NVIDIA Corporation", 5.2], ["AMD", "Advanced Micro Devices, Inc.", 4.4], ["META", "Meta Platforms, Inc.", 3.9], ["TSLA", "Tesla, Inc.", 3.1]]
         .map(([symbol, name, r], i) => ({ rank: i + 1, symbol, name, return_percent: r, last_close: 120 + i, as_of: "2026-09-30" })), universe_size: 106, evaluated: 104, method: "close-to-close", note: "A plain momentum screen, not a recommendation or a prediction.", disclaimer: "Educational only.", ...fresh }); }
-    if (p.startsWith("/api/timeline/")) { if (globalThis.__timelineFail) return json({ error: { code: "DATA_UNAVAILABLE", message: "x", retryable: true } }, 503);
+    if (p.startsWith("/api/timeline/")) { if (globalThis.__timelineFail) return json({ error: { code: "DATA_UNAVAILABLE", message: "x", retryable: true } }, 502);
       const rg = u.searchParams.get("range") || "6mo"; const n = { "1mo": 21, "3mo": 63, "6mo": 126, "1y": 252, "2y": 504, "5y": 400 }[rg]; const pts = Array.from({ length: Math.min(n, 120) }, (_, i) => ({ date: `2026-${String(1 + Math.floor(i / 28)).padStart(2, "0")}-${String(1 + (i % 28)).padStart(2, "0")}`, close: 100 + i * 0.5 + Math.sin(i / 4) * 4 }));
       return json({ symbol: p.split("/").pop(), range: rg, points: pts, n_points_total: n, downsampled: n > 120, summary: { start_date: pts[0].date, end_date: pts.at(-1).date, start_close: pts[0].close, end_close: pts.at(-1).close, period_return_pct: 59.5, high: 163.9, high_date: "2026-05-02", low: 96.2, low_date: "2026-01-03", max_drawdown_pct: -12.3 },
         note: "Adjusted closing prices. Past performance does not predict future results.", disclaimer: "Educational only.", ...fresh }); }
@@ -97,7 +98,7 @@ for (const scheme of ["light", "dark"]) {
   ok((await page.locator("[aria-labelledby=bt-title]").innerText()).match(/guessing/i) !== null, `[${scheme}] plain-language backtest verdict shown`);
   await page.waitForLoadState("networkidle");
   await axe(page, `[${scheme}] home / forecast`);
-  await page.getByRole("button", { name: "10d", exact: true }).click();
+  await page.getByRole("button", { name: "10d, 10 trading days", exact: true }).click();
   await page.getByText("(10-trading-day forecasts)").waitFor({ timeout: 15000 });
   ok(true, `[${scheme}] horizon switch updates the verdict heading`);
   await page.getByRole("heading", { name: /Expected range \/ risk/ }).waitFor();
@@ -113,20 +114,20 @@ for (const scheme of ["light", "dark"]) {
   const rangeGroup = page.getByRole("group", { name: "History range shown on the chart" });
   const labels = await rangeGroup.getByRole("button").allInnerTexts();
   ok(JSON.stringify(labels) === JSON.stringify(["1M", "3M", "6M", "1Y", "2Y", "5Y"]), `[${scheme}] chart offers 1M, 3M, 6M, 1Y, 2Y, 5Y (${labels.join(" ")})`);
-  ok((await rangeGroup.getByRole("button", { name: "6 months", exact: true }).getAttribute("aria-pressed")) === "true", `[${scheme}] chart range defaults to 6M`);
+  ok((await rangeGroup.getByRole("button", { name: "6M, 6 months", exact: true }).getAttribute("aria-pressed")) === "true", `[${scheme}] chart range defaults to 6M`);
   ok(await page.getByText("Worst drop from a peak").isVisible() && await page.getByText(/Return over 6 months/).isVisible(), `[${scheme}] range summary (return/high/low/drawdown) shown on the chart`);
-  await rangeGroup.getByRole("button", { name: "5 years", exact: true }).click();
+  await rangeGroup.getByRole("button", { name: "5Y, 5 years", exact: true }).click();
   await page.getByText(/Return over 5 years/).waitFor({ timeout: 15000 });
   ok(await page.getByText(/The chart shows 120 of 400 trading days/).isVisible(), `[${scheme}] downsampling is disclosed`);
   ok(await page.getByText(/Experimental \d+-day estimate/).isVisible(), `[${scheme}] forecast stays visible when the range changes`);
-  ok((await rangeGroup.getByRole("button", { name: "5 years", exact: true }).getAttribute("aria-pressed")) === "true", `[${scheme}] range switch (5Y)`);
+  ok((await rangeGroup.getByRole("button", { name: "5Y, 5 years", exact: true }).getAttribute("aria-pressed")) === "true", `[${scheme}] range switch (5Y)`);
   await page.reload();
   await page.getByRole("group", { name: "History range shown on the chart" }).waitFor({ timeout: 30000 });
-  ok((await page.getByRole("group", { name: "History range shown on the chart" }).getByRole("button", { name: "5 years", exact: true }).getAttribute("aria-pressed")) === "true", `[${scheme}] chosen range is remembered after reload`);
+  ok((await page.getByRole("group", { name: "History range shown on the chart" }).getByRole("button", { name: "5Y, 5 years", exact: true }).getAttribute("aria-pressed")) === "true", `[${scheme}] chosen range is remembered after reload`);
   await page.evaluate(() => localStorage.setItem("chart.range.v1", "{corrupt"));
   await page.reload();
   await page.getByRole("group", { name: "History range shown on the chart" }).waitFor({ timeout: 30000 });
-  ok((await page.getByRole("group", { name: "History range shown on the chart" }).getByRole("button", { name: "6 months", exact: true }).getAttribute("aria-pressed")) === "true", `[${scheme}] corrupt saved range falls back to 6M`);
+  ok((await page.getByRole("group", { name: "History range shown on the chart" }).getByRole("button", { name: "6M, 6 months", exact: true }).getAttribute("aria-pressed")) === "true", `[${scheme}] corrupt saved range falls back to 6M`);
   await page.getByLabel(/Show as % change from the start of the range/).check();
   await page.getByText("View chart data as a table").click();
   const rows = await page.locator("details table tbody tr").count();
@@ -135,21 +136,21 @@ for (const scheme of ["light", "dark"]) {
   await axe(page, `[${scheme}] chart with range selector, % view and table open`);
   await page.getByLabel(/Show as % change from the start of the range/).uncheck();
   // long-horizon warning and 256d option
-  for (const h of ["5d", "10d", "20d", "60d", "120d", "180d", "256d"]) ok((await page.getByRole("button", { name: h, exact: true }).count()) === 1, `[${scheme}] horizon option ${h}`);
-  await page.getByRole("button", { name: "256d", exact: true }).click();
+  for (const h of ["5d", "10d", "20d", "60d", "120d", "180d", "256d"]) ok((await page.getByRole("button", { name: `${h}, ${h.replace("d", "")} trading days`, exact: true }).count()) === 1, `[${scheme}] horizon option ${h}`);
+  await page.getByRole("button", { name: "256d, 256 trading days", exact: true }).click();
   await page.getByText(/Long-horizon forecasts \(256 trading days/).waitFor({ timeout: 15000 });
   ok(await page.getByText(/highly uncertain/).first().isVisible(), `[${scheme}] long-horizon uncertainty note shown at 256d`);
-  await page.getByRole("button", { name: "10d", exact: true }).click();
+  await page.getByRole("button", { name: "10d, 10 trading days", exact: true }).click();
   ok((await page.getByText(/Long-horizon forecasts/).count()) === 0, `[${scheme}] long-horizon note hidden for short horizons`);
   await page.getByText("(10-trading-day forecasts)").waitFor({ timeout: 15000 });
   globalThis.__timelineFail = true;
   await page.evaluate(() => Object.keys(localStorage).filter((k) => k.includes("timeline")).forEach((k) => localStorage.removeItem(k)));
-  await page.getByRole("group", { name: "History range shown on the chart" }).getByRole("button", { name: "1 year", exact: true }).click();
+  await page.getByRole("group", { name: "History range shown on the chart" }).getByRole("button", { name: "1Y, 1 year", exact: true }).click();
   await page.getByText("Price history").first().waitFor({ timeout: 20000 });
   await page.getByRole("button", { name: /retry|try again/i }).first().waitFor({ timeout: 20000 });
   ok(true, `[${scheme}] chart history error state offers retry`);
   globalThis.__timelineFail = false;
-  await page.getByRole("button", { name: "1 year", exact: true }).click().catch(() => {});
+  await page.getByRole("button", { name: "1Y, 1 year", exact: true }).click().catch(() => {});
   // experimental spike scenario: off by default (nothing fetched), toggle on, badge + simulated-not-predicted text, table, error state
   ok(await page.getByText("Experimental", { exact: true }).first().isVisible(), `[${scheme}] spike panel carries an Experimental badge`);
   ok(!(await page.getByRole("checkbox", { name: "Show spike scenario" }).isChecked()) && !globalThis.__spikeCalls, `[${scheme}] spike scenario is off by default and not fetched`);
@@ -162,7 +163,7 @@ for (const scheme of ["light", "dark"]) {
   await page.waitForLoadState("networkidle");
   await axe(page, `[${scheme}] spike scenario on`);
   globalThis.__spikeFail = true;
-  await page.getByRole("button", { name: "20d", exact: true }).click();
+  await page.getByRole("button", { name: "20d, 20 trading days", exact: true }).click();
   await page.getByRole("button", { name: /retry|try again/i }).last().waitFor({ timeout: 20000 });
   ok(true, `[${scheme}] spike scenario error state offers retry`);
   globalThis.__spikeFail = false; globalThis.__spikeCalls = 0;
@@ -205,9 +206,26 @@ for (const scheme of ["light", "dark"]) {
   await page.getByRole("alertdialog").waitFor();
   await page.getByRole("button", { name: "Cancel" }).click();
   ok((await page.getByRole("combobox", { name: "List", exact: true }).locator("option").count()) === 3, `[${scheme}] cancelling delete keeps the list`);
+  await page.waitForFunction(() => document.activeElement?.tagName === "SELECT", null, { timeout: 3000 }).catch(() => {});
+  ok(await page.evaluate(() => document.activeElement?.tagName === "SELECT"), `[${scheme}] focus returns to the list picker after cancel`);
   await page.getByRole("button", { name: "Delete" }).click();
   await page.getByRole("button", { name: "Yes, delete" }).click();
   ok((await page.getByRole("combobox", { name: "List", exact: true }).locator("option").count()) === 2, `[${scheme}] list deleted after confirm`);
+  ok(await page.evaluate(() => document.activeElement?.tagName === "SELECT"), `[${scheme}] focus returns to the list picker after delete`);
+  // search box is a real combobox: arrow keys + Enter, Escape closes, focus stays in the input
+  const search = page.getByRole("combobox", { name: "Search symbol" });
+  await search.fill("ap");
+  await page.getByRole("option", { name: /AAPL/ }).waitFor();
+  ok((await search.getAttribute("aria-expanded")) === "true", `[${scheme}] search combobox expands with suggestions`);
+  await search.press("ArrowDown");
+  ok((await page.getByRole("option", { name: /AAPL/ }).getAttribute("aria-selected")) === "true" && !!(await search.getAttribute("aria-activedescendant")), `[${scheme}] arrow key highlights an option (aria-activedescendant)`);
+  await search.press("Escape");
+  ok((await search.getAttribute("aria-expanded")) === "false" && (await page.getByRole("listbox", { name: "Search suggestions" }).count()) === 0, `[${scheme}] Escape closes the suggestions`);
+  await search.fill("am");
+  await page.getByRole("option", { name: /AMD/ }).waitFor();
+  await search.press("ArrowDown"); await search.press("ArrowDown"); await search.press("Enter");
+  await page.getByRole("heading", { name: "AMD", exact: true }).waitFor();
+  ok(true, `[${scheme}] Enter picks the highlighted suggestion`);
   // legacy watchlist migration + corrupt data
   await page.evaluate(() => { localStorage.removeItem("lists.v2"); localStorage.setItem("watchlist.v1", JSON.stringify(["AAPL", "TSLA"])); });
   await page.reload();

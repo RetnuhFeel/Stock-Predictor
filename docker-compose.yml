@@ -7,7 +7,8 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       RATE_LIMIT_PER_MIN: ${RATE_LIMIT_PER_MIN:-60}
       # Direct port mapping, no proxy in front: keep false (X-Forwarded-For would be client-controlled).
-      # Behind your own reverse proxy set TRUST_PROXY=true and TRUSTED_PROXY_HOPS to the number of proxies.
+      # Behind your own reverse proxy set TRUST_PROXY=true and TRUSTED_PROXY_HOPS to the number of proxies you trust
+      # (Render: true and 1). Wrong values either share one bucket or let clients bypass the limit.
       TRUST_PROXY: ${TRUST_PROXY:-false}
       TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
       DATA_PROVIDER: ${DATA_PROVIDER:-yfinance}

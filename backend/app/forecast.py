@@ -21,6 +21,7 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 
 from . import config
 from .errors import InsufficientData
+from .marketcal import trading_days_after
 
 SEED = 42
 FEATURES = ["ret_1", "ret_5", "ret_10", "ret_21", "vol_10", "vol_21", "rsi_14", "macd_hist", "dist_sma50"]
@@ -32,6 +33,18 @@ MIN_ROWS = 250  # ~1 year of daily bars needed for a meaningful backtest
 MIN_INDEPENDENT_TESTS = 30  # below this many non-overlapping test windows, the backtest is labelled "small sample"
 N_BOOT = 300
 Z80 = 1.2815515655446004  # standard-normal 90th percentile: half-width of a nominal 80% band in sigmas
+
+
+def ratio(num: float, den: float) -> float:
+    """num/den that cannot divide by zero: with no baseline error to compare against, report "no difference" (1.0)."""
+    return float(num) / float(den) if den > 1e-12 else 1.0
+
+
+def require_price_variation(close: pd.Series) -> None:
+    """A series whose price never changes has nothing to forecast or backtest (every error and baseline is 0)."""
+    r = np.log(close.dropna()[lambda c: c > 0]).diff().dropna()
+    if len(r) and float(r.abs().max()) < 1e-9:
+        raise InsufficientData("This price series is constant (no price changes), so there is nothing to forecast.")
 
 
 def not_enough_history(horizon: int, n_bars: int) -> str:
@@ -129,7 +142,7 @@ def skill_ci_sq(err_model_sq: np.ndarray, err_base_sq: np.ndarray, block: int,
     skills = np.empty(N_BOOT)
     for i in range(N_BOOT):
         idx = (rng.integers(0, starts_max, n_blocks)[:, None] + np.arange(block)).ravel()[:n]
-        skills[i] = 1 - np.sqrt(err_model_sq[idx].mean()) / np.sqrt(err_base_sq[idx].mean())
+        skills[i] = 1 - ratio(np.sqrt(err_model_sq[idx].mean()), np.sqrt(err_base_sq[idx].mean()))
     lo, hi = np.quantile(skills, [(1 - level) / 2, 1 - (1 - level) / 2])
     return float(lo), float(hi)
 
@@ -149,7 +162,7 @@ def skill_ci(y_true: np.ndarray, y_pred: np.ndarray, block: int, level: float = 
     skills = np.empty(N_BOOT)
     for i in range(N_BOOT):
         idx = (rng.integers(0, starts_max, n_blocks)[:, None] + np.arange(block)).ravel()[:n]
-        skills[i] = 1 - np.sqrt(err_m[idx].mean()) / np.sqrt(err_b[idx].mean())
+        skills[i] = 1 - ratio(np.sqrt(err_m[idx].mean()), np.sqrt(err_b[idx].mean()))
     lo, hi = np.quantile(skills, [(1 - level) / 2, 1 - (1 - level) / 2])
     return float(lo), float(hi)
 
@@ -159,6 +172,7 @@ def forecast(close: pd.Series, horizon: int) -> dict:
     close = close[close > 0]
     if len(close) < MIN_ROWS:
         raise InsufficientData(f"Need at least {MIN_ROWS} daily bars, got {len(close)}")
+    require_price_variation(close)
 
     feats = make_features(close)
     target = np.log(close).shift(-horizon) - np.log(close)  # future h-day log return
@@ -173,7 +187,7 @@ def forecast(close: pd.Series, horizon: int) -> dict:
     model_m = _metrics(wf.y_true, wf.y_pred)
     base_m = _metrics(wf.y_true, np.zeros_like(wf.y_true))
     # Fraction of baseline error removed (positive = better than naive). Usually ~0 or negative.
-    skill = 1 - model_m["rmse"] / base_m["rmse"]
+    skill = 1 - ratio(model_m["rmse"], base_m["rmse"])
     up_rate = float(np.mean(wf.y_true > 0))
     base_m["directional_accuracy"] = up_rate  # hit-rate of "always predict up", for context
     ci_lo, ci_hi = skill_ci(wf.y_true, wf.y_pred, horizon)
@@ -189,7 +203,7 @@ def forecast(close: pd.Series, horizon: int) -> dict:
     q10, q90 = (float(np.quantile(resid, 0.10)), float(np.quantile(resid, 0.90)))
     last = float(close.iloc[-1])
     last_date = close.index[-1]
-    bdays = pd.bdate_range(last_date, periods=horizon + 1)[1:]
+    bdays = trading_days_after(last_date, horizon)  # skips weekends AND NYSE holidays
 
     # Short/medium horizons: the empirical 10th-90th percentile of out-of-sample errors, centred on the model's
     # point estimate (calibrated against the backtest). At long horizons five years of data hold only a handful of

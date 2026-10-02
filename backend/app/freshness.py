@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-import numpy as np
+from .marketcal import trading_days_between
 
 STALE_AFTER_BUSINESS_DAYS = 5  # a full week with no new bar suggests a problem (or a long closure)
 
@@ -41,7 +41,7 @@ def describe(last_bar: date, fetched_at: float, served_from_stale_cache: bool) -
                  or no new bar for a full business week
     warnings     machine-readable notes, e.g. {"code": "STALE_DATA", ...}
     """
-    lag = int(np.busday_count(last_bar, today_ny()))
+    lag = trading_days_between(last_bar, today_ny())
     stale = served_from_stale_cache or lag >= STALE_AFTER_BUSINESS_DAYS
     out = describe_fetch(fetched_at, served_from_stale_cache, last_bar.isoformat())
     out["is_delayed"] = lag >= 2
