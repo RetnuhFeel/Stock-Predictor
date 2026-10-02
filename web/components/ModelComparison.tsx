@@ -12,6 +12,61 @@ const V: Record<ModelRow["verdict"], { icon: string; label: string; tone: string
   not_better: { icon: "✖", label: "Not better", tone: "text-red-900 dark:text-red-300" },
 };
 
+const riskVerdict: Record<string, string> = {
+  baseline: "The bar to beat",
+  better: "Better (in the past)",
+  inconclusive: "Inconclusive",
+  not_better: "Not better",
+};
+
+function RiskModels({ d }: { d: NonNullable<MC["risk_models"]> }) {
+  const g = d.garch;
+  return (
+    <div className="space-y-1">
+      <h4 className="text-sm font-semibold">Risk models <span className="font-normal text-slate-700 dark:text-slate-300">(how big the moves are, not which way)</span></h4>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-sm">
+          <caption className="mb-1 text-left text-xs text-slate-700 dark:text-slate-300">
+            Same walk-forward test, but judged on how close each estimate of volatility was to the size of moves that followed. Skill is measured against &ldquo;the next period is as jumpy as the last 21 days&rdquo;.
+            The headline risk estimate (EWMA) was fixed in advance; the others are alternatives.
+          </caption>
+          <thead>
+            <tr className="border-b border-slate-300 dark:border-slate-700">
+              <th scope="col" className="py-1 pr-2">Model</th>
+              <th scope="col" className="pr-2">Result</th>
+              <th scope="col" className="pr-2 text-right">Skill vs. recent vol</th>
+              <th scope="col" className="text-right">Compared with EWMA</th>
+            </tr>
+          </thead>
+          <tbody>
+            {d.models.map((m) => (
+              <tr key={m.model} className="border-b border-slate-200 dark:border-slate-800">
+                <th scope="row" className="py-1 pr-2 text-left font-medium">
+                  {m.label}{m.model === d.headline_model ? " (headline)" : ""}
+                  <span className="block text-xs font-normal text-slate-700 dark:text-slate-300">{m.description}</span>
+                </th>
+                <td className="pr-2">{riskVerdict[m.verdict]}</td>
+                <td className="pr-2 text-right">{m.verdict === "baseline" ? "—" : `${pct(m.skill_vs_naive)} (${pct(m.skill_ci_90[0])} to ${pct(m.skill_ci_90[1])})`}</td>
+                <td className="text-right">
+                  {m.vs_headline ? `${pct(m.vs_headline.skill)}: ${riskVerdict[m.vs_headline.verdict].toLowerCase()}` : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {!g.available && <p className="text-xs text-slate-700 dark:text-slate-300">GJR-GARCH was not run for this ticker: {g.reason ?? "not enough history"}.</p>}
+      {g.available && g.params && (
+        <p className="text-xs text-slate-700 dark:text-slate-300">
+          GJR-GARCH lets volatility drift back toward its long-run level (here about {(g.params.long_run_annual_vol * 100).toFixed(0)}% a year; shocks fade with a half-life of{" "}
+          {g.params.half_life_days == null ? "n/a" : `${g.params.half_life_days.toFixed(0)} days`}) and, {g.params.asymmetric ? "for this ticker, reacts more to down days than up days" : "for this ticker, shows little extra reaction to down days"}.
+          It is an alternative view, not a replacement: being better in a backtest is not a promise.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function ModelComparison({ symbol, horizon }: { symbol: string; horizon: number }) {
   const mc = useApi<MC>(`/api/compare-models/${encodeURIComponent(symbol)}?horizon=${horizon}`, { cheap: false });
   const d = mc.data;
@@ -75,6 +130,7 @@ export function ModelComparison({ symbol, horizon }: { symbol: string; horizon: 
               </tbody>
             </table>
           </div>
+          {d.risk_models && <RiskModels d={d.risk_models} />}
           <p className="text-xs text-slate-700 dark:text-slate-300">
             &ldquo;Better&rdquo; needs the whole 90% range above zero. Prices rose in {(d.up_rate * 100).toFixed(0)}% of test periods, so a model that just guesses &ldquo;up&rdquo; scores that on direction. {d.note}
           </p>

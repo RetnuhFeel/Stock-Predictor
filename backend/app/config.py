@@ -48,6 +48,10 @@ MAX_COMPARE_SYMBOLS = 5
 # expires are reported under "failed" (UPSTREAM_TIMEOUT) and the rest are returned; their downloads finish in the
 # background and warm the cache.
 COMPARE_DEADLINE_S = float(os.getenv("COMPARE_DEADLINE_S", "30"))
+# Long-horizon conformal calibration downloads 10 years of closes. Best effort: if it is not back in time the forecast
+# falls back to the uncalibrated volatility cone (the download still finishes in the background and warms the cache).
+CALIB_FETCH_DEADLINE_S = float(os.getenv("CALIB_FETCH_DEADLINE_S", "8"))
+GARCH_DEADLINE_S = float(os.getenv("GARCH_DEADLINE_S", "5"))  # total CPU time budget for GARCH fits per request
 
 # --- observability (all optional / off by default; no IPs, no user data are ever logged) ---
 LOG_FORMAT = os.getenv("LOG_FORMAT", "json").lower()  # "json" (default) or "text"

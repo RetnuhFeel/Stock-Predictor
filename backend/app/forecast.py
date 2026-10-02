@@ -5,8 +5,11 @@ Model:  HistGradientBoostingRegressor on simple technical features.
 Check:  expanding-window walk-forward validation (chronological, with a ``horizon``-day embargo
         so training labels never overlap the test period), compared with the naive persistence
         baseline "price stays where it is" (predicted return = 0).
-Bands:  empirical quantiles of the out-of-sample walk-forward errors (80% interval); at horizons >=
-        config.VOL_CONE_MIN_HORIZON a volatility cone around the last close, labelled uncalibrated.
+Bands:  split-conformal 80% interval (see conformal.py): a volatility-scaled half-width calibrated on past
+        out-of-sample errors, with its coverage measured by replaying the procedure through time. It is used only when
+        enough independent periods exist and the measured coverage is close to 80%. Otherwise the older bands apply:
+        empirical quantiles of the walk-forward errors, or at horizons >= config.VOL_CONE_MIN_HORIZON a volatility
+        cone around the last close, labelled uncalibrated.
 
 Daily stock returns are close to unpredictable. In most cases this model will NOT beat the
 baseline by a meaningful margin, and the response says so explicitly.
@@ -19,7 +22,7 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingRegressor
 
-from . import config
+from . import config, conformal
 from .errors import InsufficientData
 from .marketcal import trading_days_after
 
@@ -167,7 +170,58 @@ def skill_ci(y_true: np.ndarray, y_pred: np.ndarray, block: int, level: float = 
     return float(lo), float(hi)
 
 
-def forecast(close: pd.Series, horizon: int) -> dict:
+def build_path(last: float, bdays, horizon: int, centre: float, q_lo: float, q_hi: float) -> list[dict]:
+    """Dated mid/low/high prices; the band widens like sqrt(time), an approximation of the cone."""
+    out = []
+    for i, d in enumerate(bdays, start=1):
+        frac = np.sqrt(i / horizon)
+        mid = centre * i / horizon
+        out.append({
+            "date": d.strftime("%Y-%m-%d"),
+            "mid": round(last * float(np.exp(mid)), 4),
+            "low": round(last * float(np.exp(mid + q_lo * frac)), 4),
+            "high": round(last * float(np.exp(mid + q_hi * frac)), 4),
+        })
+    return out
+
+
+def legacy_view(result: dict) -> dict:
+    """The forecast with its pre-conformal band (walk-forward residual percentiles, or the volatility cone).
+
+    The live prediction log and the experimental spike scenario were built and validated on that band, so they keep
+    using it: changing it would silently change what the track record measures."""
+    lb = result.get("legacy_band")
+    if not lb:
+        return result
+    dates = pd.to_datetime([p["date"] for p in result["path"]])
+    path = build_path(float(result["last_close"]), dates, result["horizon_days"], lb["centre"], lb["q_lo"], lb["q_hi"])
+    return {**result, "path": path, "interval_80": {"low": lb["low"], "high": lb["high"]}}
+
+
+def conformal_scores_oos(wf: WalkForward, folds: list[tuple[int, slice]], index: pd.Index, sig: pd.Series,
+                         horizon: int) -> np.ndarray:
+    """Volatility-normalised absolute errors of the out-of-sample walk-forward predictions, oldest first."""
+    pos = np.concatenate([np.arange(t.start, t.stop) for _, t in folds])
+    if len(pos) != len(wf.y_true) or (len(pos) > 1 and not np.all(np.diff(pos) == 1)):
+        return np.array([])  # not consecutive origins: the embargo bookkeeping would be wrong, so do not calibrate
+    scale = sig.reindex(index[pos]).to_numpy() * np.sqrt(horizon)
+    return np.abs(wf.y_true - wf.y_pred) / scale
+
+
+def conformal_scores_cone(close: pd.Series, horizon: int) -> np.ndarray:
+    """Normalised absolute h-day returns around zero (the cone's centre), oldest first. Needs no fitted model, so every
+    origin with a known outcome counts, not only the second half of the history."""
+    logp = np.log(close)
+    y = (logp.shift(-horizon) - logp).to_numpy()
+    sig = conformal.ewma_vol_series(close).to_numpy()
+    lo, hi = conformal.BURN_IN, len(close) - horizon
+    if hi <= lo:
+        return np.array([])
+    return np.abs(y[lo:hi]) / (sig[lo:hi] * np.sqrt(horizon))
+
+
+def forecast(close: pd.Series, horizon: int, calib_close: pd.Series | None = None) -> dict:
+    """``calib_close``: optional longer price history, used only to calibrate the conformal band at cone horizons."""
     close = close.dropna()
     close = close[close > 0]
     if len(close) < MIN_ROWS:
@@ -182,6 +236,7 @@ def forecast(close: pd.Series, horizon: int) -> dict:
         raise InsufficientData(not_enough_history(horizon, len(close)))
 
     X, y = train_df[FEATURES], train_df["target"]
+    folds = fold_schedule(len(X), horizon)
     wf = walk_forward(X, y, horizon)
 
     model_m = _metrics(wf.y_true, wf.y_pred)
@@ -205,45 +260,62 @@ def forecast(close: pd.Series, horizon: int) -> dict:
     last_date = close.index[-1]
     bdays = trading_days_after(last_date, horizon)  # skips weekends AND NYSE holidays
 
-    # Short/medium horizons: the empirical 10th-90th percentile of out-of-sample errors, centred on the model's
-    # point estimate (calibrated against the backtest). At long horizons five years of data hold only a handful of
-    # independent windows, so those residual quantiles are not a trustworthy 80% band and the point estimate is
-    # mostly noise: the band is then a plain volatility cone centred on today's price, and labelled uncalibrated.
+    # Older bands. Short/medium horizons: the empirical 10th-90th percentile of out-of-sample errors, centred on the
+    # model's point estimate. At long horizons five years of data hold only a handful of independent windows, so those
+    # residual quantiles are not a trustworthy 80% band and the point estimate is mostly noise: the band is then a plain
+    # volatility cone centred on today's price, labelled uncalibrated.
     cone = horizon >= config.VOL_CONE_MIN_HORIZON
+    sig = conformal.ewma_vol_series(close)
+    daily = float(sig.iloc[-1])
     if cone:
-        from .volatility import ewma_daily_vol  # local import: volatility imports this module
-        daily = ewma_daily_vol(close)
         if not np.isfinite(daily) or daily <= 0:
             daily = float(np.log(close).diff().std())
         q_lo, q_hi, centre = -Z80 * daily * np.sqrt(horizon), Z80 * daily * np.sqrt(horizon), 0.0
     else:
         q_lo, q_hi, centre = q10, q90, point
+    legacy_band = {"centre": centre, "q_lo": q_lo, "q_hi": q_hi,
+                   "low": round(last * float(np.exp(centre + q_lo)), 4),
+                   "high": round(last * float(np.exp(centre + q_hi)), 4)}
 
-    path = []
-    for i, d in enumerate(bdays, start=1):
-        frac = np.sqrt(i / horizon)  # widen like sqrt(time); an approximation of the cone
-        mid = centre * i / horizon
-        path.append({
-            "date": d.strftime("%Y-%m-%d"),
-            "mid": round(last * float(np.exp(mid)), 4),
-            "low": round(last * float(np.exp(mid + q_lo * frac)), 4),
-            "high": round(last * float(np.exp(mid + q_hi * frac)), 4),
-        })
+    # Split-conformal band: calibrated on past forecasts only; used only if its measured coverage supports it.
+    if cone:
+        scores = conformal_scores_cone(calib_close.dropna()[lambda c: c > 0] if calib_close is not None else close,
+                                       horizon)
+    else:
+        scores = conformal_scores_oos(wf, folds, X.index, sig, horizon)
+    cal = conformal.calibrate(scores, horizon)
+    use_conformal = bool(cal.supported and np.isfinite(daily) and daily > 0)
+    if use_conformal:
+        half = cal.multiplier * daily * np.sqrt(horizon)
+        q_lo, q_hi = -half, half
+    fallback = "volatility_cone" if cone else "walk_forward_residuals"
+    conformal_info = conformal.describe(cal, use_conformal, fallback)
+
+    path = build_path(last, bdays, horizon, centre, q_lo, q_hi)
 
     # "Beats" requires a meaningful gain AND a bootstrap interval that excludes zero.
     too_few = n_independent < MIN_INDEP_FOR_VERDICT
     beats = bool(skill > 0.02 and ci_lo > 0 and not too_few)
-    if cone:
+    why = f" A conformal calibration was tried but not used: {cal.reason}." if cal.reason else ""
+    if use_conformal:
+        notes = [
+            f"80% range: a split-conformal band scaled by recent volatility, calibrated only on past forecasts. "
+            f"Replaying that recipe through the history, the real outcome landed inside the range "
+            f"{cal.measured_coverage:.0%} of the time (target 80%; about {cal.n_evaluation_independent} independent "
+            "periods, so this has real uncertainty). Outcomes fall outside it regularly, more so in market stress.",
+        ]
+    elif cone:
         notes = [
             f"Horizons of {config.VOL_CONE_MIN_HORIZON}+ trading days: the range is a volatility cone around today's "
             "price (EWMA volatility, normal approximation, nominally 80%), NOT a backtest-calibrated interval. "
             "There are too few independent backtest periods to calibrate one, and the model's point estimate is "
-            "shown for reference only. Real outcomes can fall outside this range, especially in market stress.",
+            "shown for reference only. Real outcomes can fall outside this range, especially in market stress." + why,
         ]
     else:
         notes = [
             "Interval is the empirical 10th-90th percentile of out-of-sample walk-forward errors "
-            "(an ~80% band); real outcomes fall outside it regularly, especially in market stress.",
+            "(an ~80% band); its coverage could not be verified, and real outcomes fall outside it regularly, "
+            "especially in market stress." + why,
         ]
     if horizon >= LONG_HORIZON:
         plural = "" if n_independent == 1 else "s"
@@ -265,12 +337,20 @@ def forecast(close: pd.Series, horizon: int) -> dict:
         "predicted_price": round(last * float(np.exp(point)), 4),
         "interval_80": {"low": round(last * float(np.exp(centre + q_lo)), 4),
                         "high": round(last * float(np.exp(centre + q_hi)), 4)},
-        "interval_calibrated": not cone,
-        "interval_method": ("volatility_cone: EWMA (lambda 0.94) daily volatility x sqrt(horizon), centred on the "
+        "interval_calibrated": bool(use_conformal or not cone),
+        "interval_method_name": ("split_conformal" if use_conformal else "volatility_cone" if cone
+                                 else "walk_forward_residuals"),
+        "interval_method": ("split_conformal: point estimate (zero at cone horizons) +/- a multiplier x EWMA daily "
+                            "volatility x sqrt(horizon); the multiplier is the conformal 80% quantile of past "
+                            "normalised errors (outcome known at the time only)"
+                            if use_conformal else
+                            "volatility_cone: EWMA (lambda 0.94) daily volatility x sqrt(horizon), centred on the "
                             "last close, nominal 80% under a normal approximation; not backtest-calibrated"
                             if cone else
                             "walk_forward_residuals: 10th-90th percentile of out-of-sample errors around the point "
                             "estimate"),
+        "conformal": conformal_info,
+        "legacy_band": legacy_band,
         "path": path,
         "backtest": {
             "method": f"expanding-window walk-forward, {wf.n_folds} folds, {horizon}-day embargo",

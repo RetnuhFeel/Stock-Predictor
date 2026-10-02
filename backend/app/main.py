@@ -17,7 +17,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from . import config
+from . import config, conformal
 from .cache import Fetched, TTLCache
 from .errors import (
     ApiError,
@@ -30,7 +30,7 @@ from .errors import (
     Unauthorized,
     UpstreamTimeout,
 )
-from .forecast import forecast
+from .forecast import forecast, legacy_view
 from .freshness import bar_is_final, describe, describe_fetch, today_ny
 from .marketcal import trading_days_between
 from .models import compare_models
@@ -393,12 +393,29 @@ def timeline(symbol: str, range: str = Query("5y"), provider: BaseProvider = Dep
     }
 
 
+def _calibration_history(provider: BaseProvider, sym: str, horizon: int) -> pd.Series | None:
+    """Ten years of closes, used ONLY to calibrate the conformal band at long (cone) horizons, where five years hold too
+    few independent periods. Best effort under a deadline: on any failure the forecast simply falls back to the
+    uncalibrated volatility cone (the response says why). The download keeps running and warms the cache."""
+    if horizon < config.VOL_CONE_MIN_HORIZON or not conformal.calibration_feasible(horizon):
+        return None
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="calib")
+    try:
+        fut = pool.submit(contextvars.copy_context().run, _history, provider, sym, "10y")
+        return fut.result(timeout=config.CALIB_FETCH_DEADLINE_S).value["Close"]
+    except Exception as exc:  # noqa: BLE001 - best effort by design: any failure means "use the uncalibrated cone"
+        log_event(log, "calibration_history_unavailable", logging.INFO, symbol=sym, error_class=type(exc).__name__)
+        return None
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
 def _forecast_for(provider: BaseProvider, sym: str, horizon: int) -> tuple[dict, pd.DataFrame, Fetched]:
     hist = _history(provider, sym, "5y")  # served from (stale) cache if the provider is failing
     df = hist.value
 
     def build():
-        return {"symbol": sym, **forecast(df["Close"], horizon)}
+        return {"symbol": sym, **forecast(df["Close"], horizon, _calibration_history(provider, sym, horizon))}
 
     # keyed by last bar so a new day's data invalidates the cached forecast
     key = ("fc", provider.name, sym, horizon, df.index[-1].date())
@@ -456,6 +473,9 @@ def model_report(provider: BaseProvider = Depends(get_provider)):
                 "baseline_rmse": bt["naive_baseline"]["rmse"], "hit_rate": bt["model"]["directional_accuracy"],
                 "up_rate": bt["up_rate"], "n_test_points": bt["n_test_points"],
                 "n_independent_tests": bt["n_independent_tests"], "small_sample": bt["small_sample"],
+                "range_tested": bool(result["conformal"]["used"]),
+                "range_coverage": result["conformal"]["measured_coverage"],
+                "range_independent_tests": result["conformal"]["n_evaluation_independent"],
                 "data_as_of": df.index[-1].date().isoformat(),
             })
         if not rows:
@@ -477,17 +497,38 @@ def model_report(provider: BaseProvider = Depends(get_provider)):
 
 
 # --- model comparison & volatility (bounded: one symbol, five cheap models, cached) ----------------------
+def _volatility_for(provider: BaseProvider, sym: str, horizon: int) -> tuple[dict, pd.DataFrame, Fetched]:
+    hist = _history(provider, sym, "5y")
+    df = hist.value
+    key = ("vol", provider.name, sym, horizon, df.index[-1].date())
+    result = cache.fetch(key, config.MODELS_TTL_S,
+                         lambda: {"symbol": sym, **forecast_volatility(df["Close"], horizon)}).value
+    return result, df, hist
+
+
 @app.get("/api/compare-models/{symbol}")
 def compare_models_endpoint(symbol: str, horizon: int = Query(5, ge=1, le=config.MAX_HORIZON),
                             provider: BaseProvider = Depends(get_provider)):
-    """Walk-forward (+ embargo) error of several simple models vs the naive 'price stays flat' baseline."""
+    """Walk-forward (+ embargo) error of several simple models vs the naive 'price stays flat' baseline.
+
+    ``risk_models`` adds the volatility models (EWMA, HAR, GJR-GARCH) judged the same way on the size of moves;
+    it comes from the same cached computation as /api/volatility and is omitted if that cannot be computed."""
     sym = normalize_symbol(symbol)
     hist = _history(provider, sym, "5y")
     df = hist.value
     key = ("models", provider.name, sym, horizon, df.index[-1].date())
     result = cache.fetch(key, config.MODELS_TTL_S,
                          lambda: {"symbol": sym, **compare_models(df["Close"], horizon)}).value
-    return {**result, **_freshness(df, hist), "disclaimer": config.DISCLAIMER}
+    risk = None
+    try:
+        vol, _, _ = _volatility_for(provider, sym, horizon)
+        risk = {"headline_model": vol["headline_model"], "garch": vol["garch"],
+                "models": [{k: m[k] for k in ("model", "label", "description", "typical_error_pct", "skill_vs_naive",
+                                              "skill_ci_90", "verdict", "annualized_vol", "vs_headline")
+                            if k in m} for m in vol["models"]]}
+    except InsufficientData:
+        pass  # not enough history for the volatility models: the point-model table is still returned
+    return {**result, "risk_models": risk, **_freshness(df, hist), "disclaimer": config.DISCLAIMER}
 
 
 @app.get("/api/volatility/{symbol}")
@@ -495,11 +536,7 @@ def volatility_endpoint(symbol: str, horizon: int = Query(5, ge=1, le=config.MAX
                         provider: BaseProvider = Depends(get_provider)):
     """Forecast realised volatility and a 1-sigma risk range, judged walk-forward vs 'recent realised vol'."""
     sym = normalize_symbol(symbol)
-    hist = _history(provider, sym, "5y")
-    df = hist.value
-    key = ("vol", provider.name, sym, horizon, df.index[-1].date())
-    result = cache.fetch(key, config.MODELS_TTL_S,
-                         lambda: {"symbol": sym, **forecast_volatility(df["Close"], horizon)}).value
+    result, df, hist = _volatility_for(provider, sym, horizon)
     return {**result, **_freshness(df, hist), "disclaimer": config.DISCLAIMER}
 
 
@@ -517,7 +554,8 @@ def spikes_endpoint(symbol: str, horizon: int = Query(5, ge=1, le=config.MAX_HOR
 
     def build():
         base, _, _ = _forecast_for(provider, sym, horizon)
-        return {"symbol": sym, **spike_forecast(df["Close"], horizon, base)}
+        # the spike scenario was built and validated against the pre-conformal band, so it keeps using that one
+        return {"symbol": sym, **spike_forecast(df["Close"], horizon, legacy_view(base))}
 
     key = ("spikes", provider.name, sym, horizon, df.index[-1].date())
     result = cache.fetch(key, config.MODELS_TTL_S, build).value

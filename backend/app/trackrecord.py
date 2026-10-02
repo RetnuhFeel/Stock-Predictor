@@ -19,12 +19,15 @@ log = logging.getLogger("stock-api")
 
 
 def record_from_forecast(result: dict) -> dict:
+    """The row to log. It stores the pre-conformal band (``legacy_band``) on purpose: the live log was started with that
+    interval, and switching the method mid-series would silently change what its coverage scorecard measures."""
     bt = result["backtest"]
+    band = result.get("legacy_band") or result["interval_80"]
     return {
         "symbol": result["symbol"], "horizon_days": result["horizon_days"],
         "base_date": result["last_date"], "base_close": float(result["last_close"]),
         "predicted_return": float(result["predicted_return"]),
-        "interval_low": float(result["interval_80"]["low"]), "interval_high": float(result["interval_80"]["high"]),
+        "interval_low": float(band["low"]), "interval_high": float(band["high"]),
         "backtest_skill": float(bt["skill_vs_baseline"]),
         "backtest_verdict": "better" if bt["beats_baseline"] else "not_better_or_inconclusive",
         "model": "gbm",

@@ -87,7 +87,7 @@ def test_volatility_shape_and_honesty():
     close = synthetic_prices(900, seed=2)["Close"]
     v = forecast_volatility(close, 10)
     assert v["embargo_days"] == 10 and v["headline_model"] == "ewma"
-    assert [m["model"] for m in v["models"]] == ["naive", "ewma", "har"]
+    assert [m["model"] for m in v["models"]] == ["naive", "ewma", "har", "garch"]
     assert v["models"][0]["verdict"] == "baseline"
     assert 0 < v["forecast_daily_vol"] < 0.2
     assert abs(v["annualized_vol"] - v["forecast_daily_vol"] * np.sqrt(252)) < 1e-9

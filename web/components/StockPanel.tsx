@@ -2,6 +2,7 @@
 import { useId, useMemo, useState } from "react";
 import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { useApi } from "@/lib/api";
+import { intervalInfo } from "@/lib/intervalInfo";
 import { BacktestSummary } from "./BacktestSummary";
 import { useOnline } from "@/lib/online";
 import { ModelComparison } from "./ModelComparison";
@@ -27,8 +28,8 @@ const pct = (x: number | null | undefined, d = 2) => (x == null ? "—" : `${(x 
 const money = (x: number) => `$${x.toFixed(2)}`;
 const spct = (x: number, d = 1) => `${x >= 0 ? "+" : ""}${x.toFixed(d)}%`;
 
-/** Honest label for the forecast range: only called "80% interval" when it is backtest-calibrated. */
-const rangeLabel = (f?: Forecast) => (f && f.interval_calibrated === false ? "volatility range (not backtest-calibrated)" : "80% interval");
+/** Honest label for the forecast range: "tested" only when its coverage was measured on past data (see lib/intervalInfo). */
+const rangeLabel = (f?: Forecast) => intervalInfo(f).label;
 
 function ChartTable({ history, forecast }: { history: Timeline; forecast?: Forecast }) {
   const base = history.points[0]?.close ?? 1;
@@ -156,12 +157,15 @@ export function StockPanel({ symbol }: { symbol: string }) {
               ({fc.data.predicted_return >= 0 ? "+" : ""}{pct(fc.data.predicted_return)}) — {rangeLabel(fc.data)}{" "}
               <strong>${fc.data.interval_80.low.toFixed(2)} – ${fc.data.interval_80.high.toFixed(2)}</strong>
             </p>
-            {fc.data.interval_calibrated === false && (
-              <p className="mt-1 text-xs font-medium text-amber-900 dark:text-amber-200">
-                Uncalibrated range: at this horizon there are too few independent backtest periods to calibrate an interval, so this is a
-                volatility range around today&apos;s price, not a tested 80% interval. The point estimate is shown for reference and is mostly noise.
-              </p>
-            )}
+            {(() => {
+              const info = intervalInfo(fc.data);
+              return info.summary ? (
+                <p className="mt-1 text-xs font-medium text-amber-900 dark:text-amber-200" data-testid="interval-info">
+                  {info.summary}
+                  {info.caveat ? <> <strong>{info.caveat}</strong></> : null}
+                </p>
+              ) : null;
+            })()}
             <ul className="mt-2 list-disc pl-5 text-xs text-slate-600 dark:text-slate-300">{fc.data.notes.map((n) => (<li key={n}>{n}</li>))}</ul>
             <p className="mt-2 text-xs font-medium">{fc.data.disclaimer}</p>
           </section>

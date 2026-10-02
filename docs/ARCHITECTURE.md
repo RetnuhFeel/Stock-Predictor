@@ -23,7 +23,8 @@ flowchart LR
         PROV["Provider interface"]
         FC["Forecast pipeline<br/>features → model → intervals"]
         BT["Backtest<br/>walk-forward + embargo<br/>vs. naive baseline<br/>+ block bootstrap CI"]
-        MOD["Model comparison + volatility<br/>naive · drift · EWMA · ridge-AR · GBM<br/>same walk-forward harness"]
+        MOD["Model comparison + volatility<br/>naive · drift · EWMA · ridge-AR · GBM · HAR · GJR-GARCH<br/>same walk-forward harness"]
+        CONF["Conformal intervals<br/>volatility-scaled · measured coverage"]
         LOG["Prediction log<br/>fixed tickers, scheduled only<br/>hash-chained rows"]
         DB[("Postgres via DATABASE_URL (live demo: Neon)<br/>or SQLite (default, ephemeral on free tier)")]
         API --> MW
@@ -31,6 +32,7 @@ flowchart LR
         CACHE --> PROV
         API --> FC
         FC --> BT
+        FC --> CONF
         FC --> CACHE
         API --> MOD
         MOD --> BT
@@ -89,7 +91,9 @@ sequenceDiagram
 | Chart history | `GET /api/timeline/{symbol}` | Windows (1M–5Y) for the main chart cut from the single cached 5y history, downsampled with extremes kept, summary from full data |
 | Spike scenario (experimental) | `backend/app/spikes.py`, `GET /api/spikes/{symbol}` | Jump-diffusion Monte Carlo (seeded) calibrated from the ticker's own jumps, clamped to the standard forecast band, backtested walk-forward against the standard interval. Separate from the scored prediction log |
 | Model comparison | `backend/app/models.py`, `GET /api/compare-models/{symbol}` | Five models behind one interface, same walk-forward harness, per-model skill vs. naive with bootstrap CI |
-| Volatility | `backend/app/volatility.py`, `GET /api/volatility/{symbol}` | EWMA headline + HAR-style vs. "recent vol"; 1-sigma risk range with backtest coverage |
+| Conformal intervals | `backend/app/conformal.py` | Split-conformal 80% band, volatility-scaled, calibrated on past out-of-sample errors with an h-day embargo; replays the recipe through history to measure its coverage; used only when enough independent periods exist and there is no clear under-coverage, otherwise the older band (residual percentiles / volatility cone) is kept |
+| Volatility | `backend/app/volatility.py`, `GET /api/volatility/{symbol}` | EWMA headline + HAR-style + GJR-GARCH vs. "recent vol" (and the alternatives vs. EWMA); 1-sigma risk range with backtest coverage |
+| GJR-GARCH | `backend/app/garch.py` | Own ~100-line implementation (scipy `lfilter` + SLSQP, variance targeting, hard time budget) instead of the `arch` package, which would pull in statsmodels (+36 MB RAM measured) |
 | Prediction log | `backend/app/storage.py`, `trackrecord.py`, `GET /api/prediction-log` | Fixed allowlist logged by a token-protected scheduled task; outcomes resolved later; hash-chained rows; public read endpoint |
 | Observability | `backend/app/observability.py` | Request IDs, JSON logs without IPs, opt-in aggregate stats and client error log |
 
@@ -102,6 +106,8 @@ sequenceDiagram
 **Error and freshness model.** Every non-2xx response has one shape with stable codes (`INVALID_SYMBOL`, `DATA_UNAVAILABLE`, `UPSTREAM_TIMEOUT`, `RATE_LIMITED`, …) so the UI can show friendly messages and decide whether to retry. Every data response says how old it is. If the provider fails but a recent copy exists, the API serves it flagged `stale` rather than failing, and the UI labels it "may be outdated".
 
 **Offline strategy.** The service worker caches only the app shell and hashed static assets (network-first navigations with an offline fallback). It never touches `/api` and never stores error responses, so it can't serve stale or broken API data by accident. "Last known" data lives in `localStorage`, written by the page after a successful fetch, and is always shown with an outdated label when it isn't live.
+
+**Intervals you can check.** A prediction interval is only useful if its stated coverage is real, so the 80% band is built with split conformal (a quantile of past, volatility-normalised errors) and the same recipe is replayed through history, with an embargo, to *measure* the coverage; the number and its sample size are shown to the user. If the history cannot support the check the older band is kept and labelled as such. The live prediction log deliberately keeps its original interval so its scorecard stays comparable.
 
 **Backtest vs. live evidence.** Backtests (even careful ones) are researcher-controlled: models and settings get tweaked after seeing results. So the app keeps a separate live prediction log: forecasts for a fixed ticker list are stored *before* the outcome exists, never edited (only the outcome is filled in once, and sealed on a second hash chain), hash-chained, and scored separately with no verdict until there are enough independent periods. The UI never presents backtest numbers as live results. Several models are compared, so the UI warns that one "win" can be luck.
 
