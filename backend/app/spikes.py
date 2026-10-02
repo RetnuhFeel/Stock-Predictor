@@ -196,6 +196,11 @@ def _verdict(gain: float, lo: float, hi: float) -> str:
     return "better" if gain >= MIN_GAIN and lo > 0 else "worse" if gain <= -MIN_GAIN and hi < 0 else "inconclusive"
 
 
+def origin_row(test: slice, n_rows: int, offset: int) -> int:
+    """Row index (into the walk-forward feature table) of the ``offset``-th point of a fold's test block."""
+    return range(*test.indices(n_rows))[offset]
+
+
 def backtest(close: pd.Series, horizon: int) -> dict:
     """Expanding-window walk-forward (same folds and embargo as the standard forecast).
 
@@ -219,7 +224,7 @@ def backtest(close: pd.Series, horizon: int) -> dict:
     logret = np.log(close).diff().dropna()
     dates = train_df.index
 
-    n_total = int(bounds[-1] - bounds[sizes.index(sizes[0])]) if sizes else 0
+    n_total = int(bounds[-1])  # number of out-of-sample points across all folds
     stride = max(horizon, int(np.ceil(max(n_total, 1) / MAX_BT_ORIGINS)))
     rows = {k: [] for k in ("y", "pred", "blo", "bhi", "jlo", "jhi", "slo", "shi", "smed", "smean", "clamp")}
     for k in range(1, len(folds)):
@@ -227,7 +232,10 @@ def backtest(close: pd.Series, horizon: int) -> dict:
         q10, q90 = (float(np.quantile(resid, 0.10)), float(np.quantile(resid, 0.90)))
         for j in range(int(bounds[k]), int(bounds[k + 1]), stride):
             pred, truth = float(wf.y_pred[j]), float(wf.y_true[j])
-            hist = logret.loc[: dates[j]].to_numpy()
+            # j indexes the CONCATENATED test blocks; map it to the real row of ``train_df`` (the origin day) so
+            # calibration sees data up to that day and no later (and no less).
+            row_i = origin_row(folds[k][1], len(X), j - int(bounds[k]))
+            hist = logret.loc[: dates[row_i]].to_numpy()
             if len(hist) < MIN_CAL_DAYS:
                 continue
             cal = calibrate(hist)

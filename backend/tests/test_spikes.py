@@ -170,3 +170,46 @@ def test_verdict_needs_material_and_significant_change():
     assert _verdict(0.015, 0.002, 0.03) == "inconclusive"  # significant but tiny
     assert _verdict(0.05, -0.01, 0.1) == "inconclusive"  # big but not significant
     assert _verdict(0.05, 0.01, 0.1) == "better" and _verdict(-0.05, -0.1, -0.01) == "worse"
+
+
+def test_backtest_calibrates_on_data_up_to_the_true_origin_row(monkeypatch):
+    """Regression: the fold-concatenated index j used to be used as a row index, so calibration saw data from far
+    BEFORE the real origin (and a different window than the one the forecast is scored on)."""
+    import numpy as np
+
+    from app import spikes
+    from app.forecast import FEATURES, fold_schedule, make_features, walk_forward
+
+    horizon = 5
+    close = synthetic_prices(900, seed=3)["Close"]
+    feats = make_features(close)
+    train_df = feats.assign(target=np.log(close).shift(-horizon) - np.log(close)).dropna()
+    X, y = train_df[FEATURES], train_df["target"]
+    folds = fold_schedule(len(X), horizon)
+    wf = walk_forward(X, y, horizon)
+    # independent construction of "which real row is concatenated test point j?"
+    row_of_j = np.concatenate([np.arange(len(X))[t] for _, t in folds])
+    assert len(row_of_j) == len(wf.y_pred)
+    logret = np.log(close).diff().dropna()
+
+    seen = []
+    real_cal, real_paths = spikes.calibrate, spikes.raw_log_paths
+
+    def spy_cal(hist):
+        seen.append({"n": len(hist)})
+        return real_cal(hist)
+
+    def spy_paths(cal, h, pred, n):
+        seen[-1]["pred"] = pred
+        return real_paths(cal, h, pred, n)
+
+    monkeypatch.setattr(spikes, "calibrate", spy_cal)
+    monkeypatch.setattr(spikes, "raw_log_paths", spy_paths)
+    spikes.backtest(close, horizon)
+    assert seen
+    for s in seen:
+        # tree predictions repeat, so several concatenated points can share one pred: accept any of them
+        cands = {len(logret.loc[: train_df.index[row_of_j[j]]]) for j in np.where(wf.y_pred == s["pred"])[0]}
+        assert s["n"] in cands, (s["n"], sorted(cands))
+    # and the origin rows really are spread through the later folds, not the first few hundred rows
+    assert row_of_j[0] > 150

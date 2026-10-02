@@ -60,11 +60,36 @@ def store(tmp_path):
     st.close()
 
 
+@pytest.fixture(autouse=True)
+def _log_propagation():
+    """The app logger has propagate=False; caplog needs it on. Do it for every test so results never depend on
+    which test happened to flip it first."""
+    import logging
+    lg = logging.getLogger("stock-api")
+    old = lg.propagate
+    lg.propagate = True
+    yield
+    lg.propagate = old
+
+
 @pytest.fixture
-def client(fake, store, monkeypatch):
+def after_close(monkeypatch):
+    """Pin 'now' to 17:00 New York today so a bar dated today counts as a final close (tests must not depend on the
+    wall clock; synthetic series end today)."""
+    from datetime import datetime, time
+    from zoneinfo import ZoneInfo
+
+    from app import freshness
+    monkeypatch.setattr(freshness, "now_ny", lambda: datetime.combine(
+        datetime.now(ZoneInfo("America/New_York")).date(), time(17, 0), tzinfo=ZoneInfo("America/New_York")))
+
+
+@pytest.fixture
+def client(fake, store, monkeypatch, after_close):
     monkeypatch.setattr(config, "RATE_LIMIT_PER_MIN", 1000)
     main.cache.clear()
-    main._hits.clear()
+    main.limiter.clear()
+    main.search_cache.clear()
     main.stats.reset()
     main.app.dependency_overrides[main.get_provider] = lambda: fake
     main.app.dependency_overrides[main.get_store] = lambda: store

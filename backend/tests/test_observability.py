@@ -125,3 +125,43 @@ def test_scrub_helpers():
     assert scrub("a" * 500, 10) == "a" * 10
     assert scrub_route("/path?x=1") == "/path" and scrub_route("javascript:x") == "/"
     assert request_id_var.get() == "-"
+
+
+# ---------- unhandled 500s keep CORS headers, request id, stats and the request log
+def test_unhandled_500_has_cors_request_id_stats_and_access_log(client, fake, caplog):
+    from fastapi.testclient import TestClient
+
+    fake.fail_with = RuntimeError("kaboom with /secret/path")
+    c = TestClient(main.app, raise_server_exceptions=False)
+    with caplog.at_level(logging.INFO, logger="stock-api"):
+        r = c.get("/api/quote/AAPL", headers={"Origin": "http://localhost:3000", "X-Request-ID": "trace-abc-123"})
+    assert r.status_code == 500 and r.json()["error"]["code"] == "INTERNAL_ERROR"
+    assert r.headers["access-control-allow-origin"] == "http://localhost:3000"  # browser can read the error
+    assert r.headers["x-request-id"] == "trace-abc-123"  # caller's id preserved, not "-"
+    assert "kaboom" not in r.text and "/secret/path" not in r.text
+    snap = main.stats.snapshot()
+    assert snap["by_error_code"].get("INTERNAL_ERROR") == 1 and snap["by_status"].get("5xx") == 1
+    req = [x for x in caplog.records if x.getMessage() == "request"]
+    assert len(req) == 1 and req[0].ctx["status"] == 500 and req[0].ctx["error_code"] == "INTERNAL_ERROR"
+    assert req[0].ctx["route"] == "/api/quote/{symbol}"
+    err = [x for x in caplog.records if x.getMessage() == "unhandled"]
+    assert err and err[0].exc_info  # the traceback is still logged server-side
+    assert "kaboom" not in json.dumps(req[0].ctx)
+
+
+def test_unhandled_500_without_origin_has_no_cors_header_but_has_request_id(client, fake):
+    from fastapi.testclient import TestClient
+
+    fake.fail_with = RuntimeError("x")
+    r = TestClient(main.app, raise_server_exceptions=False).get("/api/quote/AAPL")
+    assert r.status_code == 500 and "access-control-allow-origin" not in r.headers
+    assert len(r.headers["x-request-id"]) >= 8 and r.headers["x-request-id"] != "-"
+
+
+# ---------- server access log (client IP + query string) is off
+def test_uvicorn_access_log_is_disabled_and_dockerfile_passes_the_flag():
+    from pathlib import Path
+    assert logging.getLogger("uvicorn.access").disabled is True
+    docker = (Path(main.__file__).parent.parent / "Dockerfile").read_text()
+    cmd = next(line for line in docker.splitlines() if line.startswith("CMD"))
+    assert "uvicorn" in cmd and "--no-access-log" in cmd

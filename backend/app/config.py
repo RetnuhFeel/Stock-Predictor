@@ -10,11 +10,19 @@ DISCLAIMER = (
 # Comma-separated list of allowed browser origins, e.g. "https://app.example.com,http://localhost:3000"
 CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
 RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "60"))
-# Only set when running behind a trusted reverse proxy that overwrites X-Forwarded-For.
+# Only set when running behind trusted reverse proxies. The client address is then read from X-Forwarded-For,
+# counting TRUSTED_PROXY_HOPS entries from the RIGHT (each trusted proxy appends the address it saw). Entries to the
+# left of that are client-controlled and are never used. 1 = one trusted proxy in front of the app. If the header
+# has fewer entries than expected, the socket peer address is used instead (never a spoofable value).
 TRUST_PROXY = os.getenv("TRUST_PROXY", "").lower() in {"1", "true", "yes"}
+TRUSTED_PROXY_HOPS = max(int(os.getenv("TRUSTED_PROXY_HOPS", "1") or "1"), 1)
+# Hard cap on distinct limiter keys held in memory (bucket x client). Beyond it, new clients share one
+# overflow bucket (same per-minute limit) instead of growing memory.
+RATE_LIMIT_MAX_KEYS = int(os.getenv("RATE_LIMIT_MAX_KEYS", "10000"))
 
 QUOTE_TTL_S = int(os.getenv("QUOTE_TTL_S", "60"))
 HISTORY_TTL_S = int(os.getenv("HISTORY_TTL_S", "900"))
+SEARCH_CACHE_MAX_ITEMS = int(os.getenv("SEARCH_CACHE_MAX_ITEMS", "256"))  # /api/search has its own small cache
 FORECAST_TTL_S = int(os.getenv("FORECAST_TTL_S", "3600"))
 
 RANGES = {"1mo": "1mo", "3mo": "3mo", "6mo": "6mo", "1y": "1y", "2y": "2y", "5y": "5y"}
@@ -22,6 +30,10 @@ RANGES = {"1mo": "1mo", "3mo": "3mo", "6mo": "6mo", "1y": "1y", "2y": "2y", "5y"
 TIMELINE_RANGES = {"1mo": 1, "3mo": 3, "6mo": 6, "1y": 12, "2y": 24, "5y": 60}  # months
 TIMELINE_MAX_POINTS = 400
 MAX_HORIZON = 256  # trading days (~1 year); the UI offers 5/10/20/60/120/180/256
+# From this horizon on, five years of data hold too few independent backtest periods (<= ~4) for the empirical
+# backtest-residual interval to mean anything, so the forecast range is a volatility-based cone centred on today's
+# price instead, and is labelled as not backtest-calibrated (interval_calibrated=false).
+VOL_CONE_MIN_HORIZON = 120
 
 # Market data provider: "yfinance" (default, no key) or "twelvedata" (needs TWELVEDATA_API_KEY)
 DATA_PROVIDER = os.getenv("DATA_PROVIDER", "yfinance")

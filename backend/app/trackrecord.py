@@ -5,12 +5,18 @@ stored only as a labelled snapshot and are never mixed into the live scorecard.
 """
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
 
 from . import config
 from .forecast import MIN_INDEPENDENT_TESTS, skill_ci_sq
-from .storage import PredictionStore
+from .freshness import bar_is_final
+from .observability import log_event
+from .storage import HASH_FIELDS, PredictionStore
+
+log = logging.getLogger("stock-api")
 
 
 def record_from_forecast(result: dict, base_close_series: pd.Series) -> dict:
@@ -36,7 +42,8 @@ def resolve_pending(store: PredictionStore, history_for) -> dict:
             if sym not in cache:
                 cache[sym] = history_for(sym)
             close = cache[sym].dropna()
-        except Exception:  # noqa: BLE001 - provider trouble: leave pending, try again next run
+        except Exception as exc:  # noqa: BLE001 - provider trouble: leave pending, retried next run, but never silent
+            log_event(log, "resolve_pending_failed", logging.WARNING, symbol=sym, error_class=type(exc).__name__)
             still_pending += 1
             continue
         dates = [d.strftime("%Y-%m-%d") for d in close.index]
@@ -46,6 +53,9 @@ def resolve_pending(store: PredictionStore, history_for) -> dict:
         i = dates.index(row["base_date"])
         j = i + row["horizon_days"]
         if j >= len(close):
+            still_pending += 1
+            continue
+        if not bar_is_final(close.index[j].date()):  # today's bar before the close is a partial intraday value
             still_pending += 1
             continue
         # realized return from the SAME (adjusted) series for both ends, so later dividend adjustments cancel out
@@ -91,16 +101,36 @@ def scorecard(rows: list[dict], horizon: int | None = None) -> dict:
     return out
 
 
+PUBLIC_KEYS = ("id", "symbol", "horizon_days", "made_at", "base_date", "base_close", "predicted_return",
+               "interval_low", "interval_high", "backtest_skill", "backtest_verdict", "model", "status",
+               "resolved_at", "realized_date", "realized_close", "realized_return", "prev_hash", "entry_hash",
+               "res_seq", "res_prev_hash", "res_hash")
+
+
 def public_row(r: dict) -> dict:
-    keys = ("id", "symbol", "horizon_days", "made_at", "base_date", "base_close", "predicted_return", "interval_low",
-            "interval_high", "backtest_skill", "model", "status", "resolved_at", "realized_date", "realized_close",
-            "realized_return", "entry_hash")
-    out = {k: r[k] for k in keys}
+    """Everything needed to recompute both hash chains (see ``hash_spec``) is public."""
+    out = {k: r.get(k) for k in PUBLIC_KEYS}
     if r["status"] == "resolved":
         px = r["base_close"] * float(np.exp(r["realized_return"]))
         out["in_interval"] = bool(r["interval_low"] <= px <= r["interval_high"])
         out["direction_correct"] = bool(np.sign(r["predicted_return"]) == np.sign(r["realized_return"]))
     return out
+
+
+def hash_spec() -> dict:
+    """Machine-readable description of how the log's hashes are computed, for third-party verification."""
+    return {
+        "algorithm": "sha256 (hex)",
+        "genesis": "0" * 64,
+        "entry_hash": "sha256(prev_hash + json.dumps([row[f] for f in entry_fields], separators=(',',':'), "
+                      "default=str)); prev_hash = entry_hash of the previous row by id (genesis for the first)",
+        "entry_fields": list(HASH_FIELDS),
+        "res_hash": "sha256(res_prev_hash + entry_hash + json.dumps([row[f] for f in outcome_fields], "
+                    "separators=(',',':'), default=str)); res_seq counts 1,2,3... in resolution order, "
+                    "res_prev_hash is the previous sealed outcome's res_hash (genesis for res_seq 1)",
+        "outcome_fields": list(("status", "resolved_at", "realized_date", "realized_close", "realized_return")),
+        "note": "Rows resolved before outcome seals existed have null res_* fields (reported as unsealed_resolved).",
+    }
 
 
 def log_symbols() -> list[str]:

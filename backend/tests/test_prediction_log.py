@@ -46,7 +46,9 @@ def test_resolve_once_and_prediction_fields_untouched(store):
     after = store.all_rows()[0]
     assert after["status"] == "resolved" and after["realized_close"] == 103.0
     assert after["predicted_return"] == row["predicted_return"] and after["entry_hash"] == row["entry_hash"]
-    assert store.verify_chain() is True  # outcome fields are not part of the hash
+    assert store.verify_chain() is True  # entry chain untouched by resolution
+    rep = store.verify_report()
+    assert rep == {"chain_ok": True, "outcomes_ok": True, "unsealed_resolved": 0, "sealed_resolved": 1}
 
 
 def test_pagination_filters(store):
@@ -188,7 +190,7 @@ def test_prediction_log_endpoint_empty_state_and_pagination(client, task, store)
     b = client.get("/api/prediction-log?limit=2&offset=0").json()
     assert b["total"] == 3 and len(b["items"]) == 2 and b["limit"] == 2
     row = b["items"][0]
-    assert "entry_hash" in row and "prev_hash" not in row and row["status"] == "pending"
+    assert "entry_hash" in row and "prev_hash" in row and row["status"] == "pending"
     assert client.get("/api/prediction-log?limit=0").status_code in (400, 422)
     assert client.get("/api/prediction-log?limit=101").status_code in (400, 422)
     assert client.get("/api/prediction-log?status=weird").json()["error"]["code"] == "INVALID_REQUEST"

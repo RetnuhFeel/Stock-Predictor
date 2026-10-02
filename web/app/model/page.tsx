@@ -20,7 +20,7 @@ export default function Model() {
       <p>
         For each ticker it turns daily adjusted closing prices into a few simple features (recent returns, volatility, RSI, MACD, distance
         from the 50-day average) and trains a small, regularised gradient-boosting regressor to guess the price change over the next
-        <em> N</em> trading days. The 80% range shown with each forecast comes from how wrong the model was on data it had not seen.
+        <em> N</em> trading days. For horizons under 120 trading days the 80% range shown with each forecast comes from how wrong the model was on data it had not seen. At 120 days and longer, five years of data hold only a handful of independent test periods, so we cannot calibrate a range that way: the range shown is a volatility range around today&apos;s price (recent volatility scaled to the horizon, nominally 80% if returns were normal), it is labelled <em>not backtest-calibrated</em>, and the model&apos;s point estimate is for reference only.
       </p>
       <h2>How we test it, honestly</h2>
       <ul>
@@ -50,7 +50,7 @@ export default function Model() {
       </p>
       <ul>
         <li><strong>Simulated, not predicted:</strong> it does not know when a spike will occur or its direction.</li>
-        <li><strong>Backtest:</strong> same walk-forward folds and embargo as above. It compares how often the real move landed inside each range, a combined width-and-miss score (Winkler interval score) with a bootstrap 90% range, and the accuracy of the median path. We only say &ldquo;better&rdquo; for a change of at least 2% whose 90% range excludes zero. In our checks on SPY, AAPL, MSFT, NVDA and TSLA (5 and 20 days) the median path was never clearly more accurate than the standard forecast, and because of the clamp the spike range is never wider than the standard band (often identical, sometimes narrower and then it contained fewer real outcomes). See the docs for the numbers.</li>
+        <li><strong>Backtest:</strong> same walk-forward folds and embargo as above. It compares how often the real move landed inside each range, a combined width-and-miss score (Winkler interval score) with a bootstrap 90% range, and the accuracy of the median path. We only say &ldquo;better&rdquo; for a change of at least 2% whose 90% range excludes zero. In our checks on SPY, AAPL, MSFT, NVDA and TSLA (5 and 20 days) the median path was never clearly more accurate than the standard forecast. Because of the clamp the spike range is never wider than the standard band; in most of our checks it was narrower and contained fewer real outcomes, so a better interval score there mostly reflects a narrower range, not a safer one. See the docs for the numbers.</li>
         <li><strong>Not scored:</strong> it is never part of the live track record&apos;s logged predictions.</li>
       </ul>
       <ModelReport />

@@ -151,3 +151,42 @@ def test_timeline_unknown_range_is_invalid_range(client):
     for bad in ("max", "10y", "ytd", "", "6MO"):
         r = client.get(f"/api/timeline/AAPL?range={bad}")
         assert r.status_code == 400 and r.json()["error"]["code"] == "INVALID_RANGE"
+
+
+# ---------- honest long-horizon intervals (>= VOL_CONE_MIN_HORIZON)
+def test_long_horizon_interval_is_an_uncalibrated_volatility_cone_containing_spot():
+    close = synthetic_prices(1250, seed=7, drift=0.0006)["Close"]
+    below = forecast(close, config.VOL_CONE_MIN_HORIZON - 1)
+    at = forecast(close, config.VOL_CONE_MIN_HORIZON)
+    top = forecast(close, 256)
+    assert below["interval_calibrated"] is True and "walk_forward_residuals" in below["interval_method"]
+    for r in (at, top):
+        assert r["interval_calibrated"] is False and r["interval_method"].startswith("volatility_cone")
+        lo, hi = r["interval_80"]["low"], r["interval_80"]["high"]
+        assert lo < r["last_close"] < hi  # centred on today's price, never a band wholly above/below spot
+        assert any("NOT a backtest-calibrated" in n for n in r["notes"])
+        p = r["path"]
+        assert p[-1]["low"] == pytest.approx(lo) and p[-1]["high"] == pytest.approx(hi)
+        assert all(x["low"] < x["mid"] < x["high"] for x in p)
+        assert p[0]["high"] - p[0]["low"] < p[-1]["high"] - p[-1]["low"]  # cone widens
+    assert top["interval_80"]["high"] - top["interval_80"]["low"] > at["interval_80"]["high"] - at["interval_80"]["low"]
+
+
+def test_noisy_point_estimate_no_longer_makes_the_band_sit_above_spot(monkeypatch):
+    """The old band was point +/- residual quantiles; a big positive point estimate put all of it above spot."""
+    from app import forecast as fc
+
+    class Boom:
+        def fit(self, X, y):
+            return self
+
+        def predict(self, X):
+            return [0.45] * len(X)  # absurdly bullish point estimate
+
+    monkeypatch.setattr(fc, "_model", lambda: Boom())
+    close = synthetic_prices(1250, seed=8)["Close"]
+    r = forecast(close, 256)
+    assert r["predicted_return"] == pytest.approx(0.45)  # the point estimate is still reported, as reference only
+    assert r["interval_80"]["low"] < r["last_close"] < r["interval_80"]["high"]
+    short = forecast(close, 20)  # calibrated horizons keep the residual band around the point estimate
+    assert short["interval_calibrated"] is True
