@@ -104,7 +104,7 @@ def after_close(monkeypatch):
 
     from app import freshness
     monkeypatch.setattr(freshness, "now_ny", lambda: datetime.combine(
-        datetime.now(ZoneInfo("America/New_York")).date(), time(17, 0), tzinfo=ZoneInfo("America/New_York")))
+        freshness.today_ny(), time(17, 0), tzinfo=ZoneInfo("America/New_York")))
 
 
 @pytest.fixture
