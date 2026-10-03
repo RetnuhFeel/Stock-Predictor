@@ -1,0 +1,9 @@
+# A looser style for the analysis scripts (dense tables and chart code); backend/ruff.toml still governs the app.
+line-length = 160
+target-version = "py312"
+extend-exclude = ["*.ipynb"]
+[lint]
+select = ["E", "F", "I", "UP"]
+per-file-ignores = { "run_analysis.py" = ["E402"] }
+[lint.isort]
+known-first-party = ["app"]

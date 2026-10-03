@@ -1,0 +1,5 @@
+# Dependencies for analysis/run_analysis.py (the backend's own requirements plus matplotlib for the charts).
+# Install with the backend lockfile as a constraint so versions match the app and CI:
+#   pip install -c backend/requirements.lock -r analysis/requirements.txt
+-r ../backend/requirements.txt
+matplotlib>=3.8,<4
