@@ -10,7 +10,7 @@ from app.errors import DataUnavailable
 from app.storage import GENESIS, PredictionStore, StorageUnavailable, _normalise_url
 from app.trackrecord import resolve_pending, scorecard
 
-from .conftest import synthetic_prices
+from .conftest import lagged_end, synthetic_prices
 
 
 def rec(symbol="SPY", base_date="2026-09-01", pred=0.01, close=100.0, h=5):
@@ -173,7 +173,7 @@ def test_task_skips_failures_and_stale(client, task, store, fake, monkeypatch):
     assert body["logged"] == ["SPY"] and body["skipped"][0] == {"symbol": "FAIL", "reason": "DATA_UNAVAILABLE"}
     # data that is days old could already contain the outcome: never logged
     main.cache.clear()
-    old = synthetic_prices(900, end=pd.Timestamp(main.today_ny()) - pd.offsets.BDay(10))
+    old = synthetic_prices(900, end=lagged_end(10))
     fake.history = lambda symbol, period: old
     monkeypatch.setattr(config, "LOG_SYMBOLS", ["AAPL"])
     body = client.post("/api/_tasks/run-prediction-log", headers=task).json()

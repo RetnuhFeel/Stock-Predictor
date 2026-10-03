@@ -6,15 +6,36 @@ from fastapi.testclient import TestClient
 from app import config, main
 from app.errors import DataUnavailable
 from app.freshness import today_ny
+from app.marketcal import market_offset
 from app.providers.base import BaseProvider
+
+
+def trading_index(n: int, end=None) -> pd.DatetimeIndex:
+    """``n`` NYSE trading days ending on the last trading day on or before ``end`` (default: today, New York).
+
+    Weekend- and holiday-proof: on a Saturday, or a market holiday, the series ends on the previous trading day,
+    like real provider data does. Use this (not ``pd.bdate_range``, which counts holidays as sessions) for any
+    fake price history that is supposed to look "current"."""
+    end = pd.Timestamp(end) if end is not None else pd.Timestamp(today_ny())
+    return pd.date_range(end=end, periods=n, freq=market_offset())
+
+
+def last_bar_date(end=None) -> str:
+    """ISO date of the newest bar of ``trading_index`` (what the API reports as ``data_as_of``)."""
+    return trading_index(1, end)[-1].date().isoformat()
+
+
+def lagged_end(trading_days_old: int) -> pd.Timestamp:
+    """End date for fake data whose newest bar is ``trading_days_old`` trading days behind today, measured the way
+    the app measures it (``trading_days_between(bar, today_ny())``), so it also holds on weekends and holidays."""
+    return trading_index(trading_days_old, pd.Timestamp(today_ny()) - pd.Timedelta(days=1))[0]
 
 
 def synthetic_prices(n=900, seed=0, drift=0.0003, vol=0.012, end=None) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     close = 100 * np.exp(np.cumsum(rng.normal(drift, vol, n)))
-    # end on the most recent business day so freshness checks see "current" data
-    end = pd.Timestamp(end) if end is not None else pd.Timestamp(today_ny())
-    idx = pd.bdate_range(end=end, periods=n)
+    # end on the most recent trading day so freshness checks see "current" data
+    idx = trading_index(n, end)
     return pd.DataFrame({"Open": close, "High": close * 1.01, "Low": close * 0.99, "Close": close,
                          "Volume": rng.integers(1_000, 5_000, n)}, index=idx)
 
