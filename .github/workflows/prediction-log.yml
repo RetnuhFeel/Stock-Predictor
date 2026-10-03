@@ -33,7 +33,7 @@ jobs:
       API_BASE_URL: ${{ vars.API_BASE_URL }}
       LOG_TASK_TOKEN: ${{ secrets.LOG_TASK_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: .github/scripts
           persist-credentials: false
