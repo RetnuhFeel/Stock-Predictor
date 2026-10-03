@@ -22,7 +22,27 @@ jobs:
             backend/requirements.lock
       - run: pip install -c requirements.lock -r requirements-dev.txt
       - run: ruff check .
+      - run: ruff check ../analysis
       - run: pytest -q
+
+  analysis:
+    # Smoke test only: proves analysis/run_analysis.py still runs against the backend code (offline, made-up prices,
+    # 2 tickers). The committed results/charts come from a real-data run; see analysis/README.md.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            analysis/requirements.txt
+            backend/requirements.txt
+            backend/requirements.lock
+      - run: pip install -c backend/requirements.lock -r analysis/requirements.txt
+      - run: python analysis/run_analysis.py --synthetic --quick --out "$RUNNER_TEMP/analysis-smoke"
+      - run: test "$(ls "$RUNNER_TEMP"/analysis-smoke/figures/*.png | wc -l)" -eq 5
+      - run: python analysis/build_findings.py --check
 
   web:
     runs-on: ubuntu-latest
