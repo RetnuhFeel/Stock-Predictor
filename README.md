@@ -12,6 +12,8 @@ Every forecast ships with a walk-forward backtest against the "price stays flat"
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
 ![PWA](https://img.shields.io/badge/PWA-installable-5A0FC8)
 
+**📊 [Methods and findings: what worked, what did not, and how it was tested](docs/FINDINGS.md)** (20 tickers, walk-forward validation, GARCH vs EWMA, conformal ranges; reproducible from [`analysis/`](analysis/))
+
 **[Live demo](https://stock-predictor-web-ts7p.onrender.com)** · **[API](https://stock-predictor-api-2dnn.onrender.com/docs)** · **[Model report](https://stock-predictor-web-ts7p.onrender.com/model)** · **[Architecture](docs/ARCHITECTURE.md)**
 
 <img src="docs/img/demo.gif" alt="Demo: accept the disclaimer, view a forecast, switch to a 20-day horizon, compare tickers, open the model report" width="720">
@@ -24,7 +26,7 @@ Every forecast ships with a walk-forward backtest against the "price stays flat"
 
 ## Why this exists
 
-Most stock "predictors" show a confident line and nothing else. Short-horizon stock returns are close to random, so this project does the opposite: it builds a real forecasting pipeline and then **grades it in public**. On the [model report page](https://stock-predictor-web-ts7p.onrender.com/model) the model is backtested on SPY, AAPL, MSFT, NVDA and TSLA. When this was written it did **not** beat the naive baseline on any of them, and the page says so.
+Most stock "predictors" show a confident line and nothing else. Short-horizon stock returns are close to random, so this project does the opposite: it builds a real forecasting pipeline and then **grades it in public**. On the [model report page](https://stock-predictor-web-ts7p.onrender.com/model) the model is backtested on SPY, AAPL, MSFT, NVDA and TSLA. When this was written it did **not** beat the naive baseline on any of them, and the page says so. A larger, reproducible version of that test (20 tickers, several horizons, volatility models, interval calibration) is written up in [docs/FINDINGS.md](docs/FINDINGS.md).
 
 ## Screenshots
 
@@ -111,7 +113,8 @@ Configuration (env vars, endpoints, providers, error codes, custom domain, deplo
 backend/            FastAPI service (app/main.py, forecast.py, providers/, cache.py, freshness.py, observability.py) + pytest suite
 web/                Next.js PWA (app/ routes, components/, lib/, public/sw.js)
 web/e2e/            Headless-browser scripts: CI smoke + axe (mocked API), full checks, screenshot generator
-docs/               ARCHITECTURE.md, REFERENCE.md, images, social preview
+docs/               ARCHITECTURE.md, REFERENCE.md, FINDINGS.md (methods and results), images, social preview
+analysis/           Reproducible analysis behind FINDINGS.md: run_analysis.py, notebook, saved results and charts
 .github/            CI, keep-alive, daily prediction-log job, Dependabot, issue/PR templates, CODEOWNERS
 StockAnalyzerApp/   Legacy iOS app (see below)
 ```
