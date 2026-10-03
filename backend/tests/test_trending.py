@@ -5,16 +5,14 @@ import pytest
 
 from app import config, main
 from app.errors import DataUnavailable, RateLimited
-from app.freshness import today_ny
 from app.providers.yahoo import split_batch
 from app.universe import NAMES, SYMBOLS, UNIVERSE
 
-from .conftest import FakeProvider
+from .conftest import FakeProvider, lagged_end, last_bar_date, trading_index
 
 
 def frame(closes, end=None):
-    end = pd.Timestamp(end) if end is not None else pd.Timestamp(today_ny())
-    idx = pd.bdate_range(end=end, periods=len(closes))
+    idx = trading_index(len(closes), end)
     c = np.array(closes, dtype=float)
     return pd.DataFrame({"Open": c, "High": c, "Low": c, "Close": c, "Volume": 1000}, index=idx)
 
@@ -47,7 +45,7 @@ class BatchProvider(FakeProvider):
         for s in symbols:
             if s in self.missing:
                 continue
-            end = pd.Timestamp(today_ny()) - pd.offsets.BDay(4) if s in self.stale_syms else None
+            end = lagged_end(4) if s in self.stale_syms else None
             out[s] = frame(with_last(self.returns.get(s, 0.5)), end)
         return out
 
@@ -76,7 +74,7 @@ def test_ranking_top5_by_return(client, trend):
     assert top["return_percent"] == 9.1 and top["name"] == "NVIDIA" and top["last_close"] == pytest.approx(109.1)
     assert b["days"] == 3 and b["limit"] == 5 and b["universe_size"] == len(SYMBOLS) and b["evaluated"] == len(SYMBOLS)
     assert "not a recommendation" in b["note"] and "do not predict" in b["note"] and b["disclaimer"]
-    assert b["stale"] is False and b["fetched_at"].endswith("Z") and b["data_as_of"] == today_ny().isoformat()
+    assert b["stale"] is False and b["fetched_at"].endswith("Z") and b["data_as_of"] == last_bar_date()
 
 
 def test_limit_days_and_ties(client, trend):

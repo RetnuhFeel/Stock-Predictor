@@ -19,7 +19,7 @@ from app.storage import (
 )
 from app.trackrecord import hash_spec, public_row, resolve_pending
 
-from .conftest import synthetic_prices
+from .conftest import lagged_end, synthetic_prices
 from .test_prediction_log import rec
 
 
@@ -365,7 +365,7 @@ def test_task_refuses_a_partial_intraday_bar(client, task_env, store, monkeypatc
 @pytest.mark.parametrize("busdays_old,logged", [(1, True), (2, False), (3, False)])
 def test_task_allows_at_most_one_business_day_of_lag(client, task_env, store, fake, monkeypatch, busdays_old, logged):
     monkeypatch.setattr(config, "LOG_SYMBOLS", ["SPY"])
-    series = synthetic_prices(900, end=pd.Timestamp(main.today_ny()) - pd.offsets.BDay(busdays_old))
+    series = synthetic_prices(900, end=lagged_end(busdays_old))
     fake.history = lambda symbol, period: series
     body = client.post("/api/_tasks/run-prediction-log", headers=task_env).json()
     assert (body["logged"] == ["SPY"]) is logged
