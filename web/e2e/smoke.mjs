@@ -25,7 +25,8 @@ const logRow = (id, status) => ({ id, symbol: id % 2 ? "SPY" : "AAPL", horizon_d
   backtest_skill: -0.03, model: "gbm", status, resolved_at: status === "resolved" ? "2026-09-30T22:30:00Z" : null, realized_date: status === "resolved" ? "2026-09-30" : null, realized_close: status === "resolved" ? 101 : null,
   realized_return: status === "resolved" ? 0.01 : null, entry_hash: "ab".repeat(32), ...(status === "resolved" ? { in_interval: true, direction_correct: true } : {}) });
 const fullLog = { ...emptyLog, items: [logRow(2, "resolved"), logRow(1, "pending")], total: 2, scorecard: { ...sc0, verdict: "too_early", n_resolved: 1, n_pending: 1, n_dates: 1, n_independent: 1, horizon_days: 5, skill_vs_naive: -0.02, skill_ci_90: null,
-  hit_rate: 1, up_rate: 1, interval_coverage: 1, interval_nominal: 0.8 } };
+  hit_rate: 1, up_rate: 1, interval_coverage: 1, interval_nominal: 0.8 },
+  missed_sessions: [{ base_date: "2026-10-02", symbols: ["SPY", "AAPL"], cause: "upstream_data_not_updated", note: "No predictions were recorded for this close.", backfilled: false }] };
 
 async function mockApi(context) {
   await context.route(`${API}/**`, async (route) => {
@@ -285,6 +286,7 @@ for (const scheme of ["light", "dark"]) {
   await page.goto(`${WEB}/track-record`);
   await page.getByText(/Too early to say/).waitFor({ timeout: 15000 });
   ok((await page.locator("section[aria-labelledby=log] tbody tr").count()) === 2, `[${scheme}] track-record rows`);
+  ok((await page.locator("section[aria-labelledby=missed] li").count()) === 1, `[${scheme}] track-record lists missed days`);
   ok(await page.getByText(/Waiting \(resolves after 5 trading days\)/).isVisible(), `[${scheme}] pending prediction shown as waiting`);
   ok(await page.getByText(/Live results only/).isVisible(), `[${scheme}] live vs backtest distinction stated`);
   await axe(page, `[${scheme}] /track-record (populated)`);

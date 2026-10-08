@@ -253,9 +253,12 @@ export type PredictionLog = Freshness & {
   unsealed_resolved?: number;
   symbols: string[];
   horizon_days: number;
+  /** Sessions with no predictions, listed openly; never back-filled. Optional: older APIs don't send it. */
+  missed_sessions?: MissedSession[];
   storage: { backend: string; durable: boolean };
   disclaimer: string;
 };
+export type MissedSession = { base_date: string; symbols: string[]; cause: string; note: string; backfilled: boolean };
 
 export type TrendingItem = { rank: number; symbol: string; name: string; return_percent: number; last_close: number; as_of: string };
 export type Trending = Freshness & {
