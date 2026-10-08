@@ -19,7 +19,7 @@ from app.storage import (
 )
 from app.trackrecord import hash_spec, public_row, resolve_pending
 
-from .conftest import lagged_end, synthetic_prices
+from .conftest import synthetic_prices
 from .test_prediction_log import rec
 
 
@@ -351,26 +351,44 @@ def test_bar_is_final_rules():
     _ = time
 
 
-def test_task_refuses_a_partial_intraday_bar(client, task_env, store, monkeypatch):
+def _pin(monkeypatch, when: datetime) -> None:
     from app import freshness
-    monkeypatch.setattr(freshness, "now_ny", lambda: datetime.combine(
-        datetime.now(NY).date(), time(11, 0), tzinfo=NY))
-    if datetime.now(NY).weekday() >= 5:
-        pytest.skip("no live session on weekends")
+    monkeypatch.setattr(freshness, "now_ny", lambda: when)
+
+
+def test_task_refuses_a_partial_intraday_bar(client, task_env, store, fake, monkeypatch):
+    # Thu 2026-10-08 05:40 (morning backup run): the provider already returns a (pre-market, partial) bar dated today
+    series = synthetic_prices(900, end="2026-10-08")
+    fake.history = lambda symbol, period: series
+    _pin(monkeypatch, datetime(2026, 10, 8, 5, 40, tzinfo=NY))
     body = client.post("/api/_tasks/run-prediction-log", headers=task_env).json()
+    assert body["expected_base"] == "2026-10-07"
     assert body["logged"] == [] and {s["reason"] for s in body["skipped"]} == {"PARTIAL_BAR"}
     assert store.all_rows() == []
 
 
-@pytest.mark.parametrize("busdays_old,logged", [(1, True), (2, False), (3, False)])
-def test_task_allows_at_most_one_business_day_of_lag(client, task_env, store, fake, monkeypatch, busdays_old, logged):
-    monkeypatch.setattr(config, "LOG_SYMBOLS", ["SPY"])
-    series = synthetic_prices(900, end=lagged_end(busdays_old))
+def test_task_logs_nothing_while_the_session_is_open(client, task_env, store, fake, monkeypatch):
+    # during the session the previous close's outcome window has started: logging it now would use hindsight
+    series = synthetic_prices(900, end="2026-10-06")
     fake.history = lambda symbol, period: series
+    _pin(monkeypatch, datetime(2026, 10, 7, 11, 0, tzinfo=NY))
     body = client.post("/api/_tasks/run-prediction-log", headers=task_env).json()
+    assert body["logged"] == [] and {s["reason"] for s in body["skipped"]} == {"SESSION_IN_PROGRESS"}
+    assert body["expected_batch"]["missing"] == ["SPY", "AAPL"] and store.all_rows() == []
+
+
+@pytest.mark.parametrize("last_bar,logged", [("2026-10-07", True), ("2026-10-06", False), ("2026-10-05", False)])
+def test_task_allows_at_most_one_business_day_of_lag(client, task_env, store, fake, monkeypatch, last_bar, logged):
+    # morning backup run, Thu 2026-10-08 05:40 New York: the expected base is Wednesday's close
+    monkeypatch.setattr(config, "LOG_SYMBOLS", ["SPY"])
+    series = synthetic_prices(900, end=last_bar)
+    fake.history = lambda symbol, period: series
+    _pin(monkeypatch, datetime(2026, 10, 8, 5, 40, tzinfo=NY))
+    body = client.post("/api/_tasks/run-prediction-log", headers=task_env).json()
+    assert body["expected_base"] == "2026-10-07"
     assert (body["logged"] == ["SPY"]) is logged
     if not logged:
-        assert body["skipped"][0]["reason"] == "STALE_DATA"
+        assert body["skipped"][0]["reason"] == "DATA_NOT_UPDATED"
 
 
 def test_resolver_does_not_resolve_on_a_partial_bar(store, monkeypatch):

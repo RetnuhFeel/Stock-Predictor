@@ -86,6 +86,14 @@ def is_trading_day(d: date) -> bool:
     return d.weekday() < 5 and d not in set(all_holidays())
 
 
+def previous_trading_day(d: date) -> date:
+    """The last trading day strictly before ``d``."""
+    d -= timedelta(days=1)
+    while not is_trading_day(d):
+        d -= timedelta(days=1)
+    return d
+
+
 def market_offset() -> pd.offsets.CustomBusinessDay:
     """pandas offset that steps over weekends and NYSE holidays (``ts - market_offset() * n`` etc.)."""
     return pd.offsets.CustomBusinessDay(holidays=[np.datetime64(d) for d in all_holidays()])

@@ -17,7 +17,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from . import config, conformal
+from . import config, conformal, freshness
 from .cache import Fetched, TTLCache
 from .errors import (
     ApiError,
@@ -31,7 +31,13 @@ from .errors import (
     UpstreamTimeout,
 )
 from .forecast import forecast, legacy_view
-from .freshness import bar_is_final, describe, describe_fetch, today_ny
+from .freshness import (
+    bar_is_final,
+    describe,
+    describe_fetch,
+    expected_base_session,
+    session_in_progress,
+)
 from .marketcal import trading_days_between
 from .models import compare_models
 from .observability import (
@@ -50,7 +56,14 @@ from .ratelimit import RateLimiter, client_key
 from .spikes import spike_forecast
 from .storage import PredictionStore, now_iso
 from .symbols import normalize_symbol
-from .trackrecord import hash_spec, public_row, record_from_forecast, resolve_pending, scorecard
+from .trackrecord import (
+    hash_spec,
+    missed_sessions,
+    public_row,
+    record_from_forecast,
+    resolve_pending,
+    scorecard,
+)
 from .volatility import forecast_volatility
 
 log = setup_logging()
@@ -584,42 +597,94 @@ def _require_task_token(request: Request) -> None:
         raise Unauthorized("Missing or invalid task token.")
 
 
+def _refetch_history(provider: BaseProvider, sym: str, period: str) -> Fetched | None:
+    """Fetch history straight from the provider, bypassing the TTL cache (whose copy is behind), and cache the result.
+    None if the provider fails: the caller then treats the data as not updated."""
+    try:
+        df = provider.history(sym, period)
+    except ApiError as exc:
+        log_event(log, "prediction_log_refetch_failed", logging.WARNING, symbol=sym, code=exc.code)
+        return None
+    return cache.put(("hist", provider.name, sym, period), df, config.HISTORY_TTL_S, config.STALE_MAX_AGE_S)
+
+
 @app.post("/api/_tasks/run-prediction-log", include_in_schema=False)
 def run_prediction_log(request: Request, provider: BaseProvider = Depends(get_provider),
                        store: PredictionStore = Depends(get_store)):
-    """Scheduled job (GitHub Actions): log today's predictions for the fixed allowlist, then resolve old ones.
-    Disabled (404) unless LOG_TASK_TOKEN is set. Idempotent: one row per (symbol, horizon, base date)."""
+    """Scheduled job (GitHub Actions): log predictions for the fixed allowlist, then resolve old ones.
+    Disabled (404) unless LOG_TASK_TOKEN is set. Idempotent: one row per (symbol, horizon, base date).
+
+    Each run knows which session it should be logging (``expected_base``: today's close after 16:10 New York time on a
+    trading day, otherwise the previous trading day's close). A symbol is only logged, or counted as already logged,
+    for exactly that base. Data that ends earlier is refetched once past the cache; if it is still behind, the symbol
+    is skipped as DATA_NOT_UPDATED (an older base is never reported as ALREADY_LOGGED). Between the open and the close
+    nothing is logged (SESSION_IN_PROGRESS): the outcome window of the previous close has already started."""
     _require_task_token(request)
-    logged, skipped = [], []
+    now = freshness.now_ny()  # looked up at call time so tests (and the clock fixture) can pin it
+    expected = expected_base_session(now)
+    expected_iso = expected.isoformat()
+    in_session = session_in_progress(now)
+    logged, skipped, results = [], [], []
+
+    def skip(sym: str, reason: str, base=None, **extra) -> None:
+        skipped.append({"symbol": sym, "reason": reason, **extra})
+        results.append({"symbol": sym, "base_date": base.isoformat() if base else None, "status": reason, **extra})
+
     for sym in config.LOG_SYMBOLS:
+        if in_session:
+            skip(sym, "SESSION_IN_PROGRESS")
+            continue
         try:
             result, df, hist = _forecast_for(provider, sym, config.LOG_HORIZON)
         except ApiError as exc:
-            skipped.append({"symbol": sym, "reason": exc.code})
+            skip(sym, exc.code)
             continue
         base = df.index[-1].date()
-        lag = trading_days_between(base, today_ny())
+        refetched = False
+        if base < expected:
+            # The cached copy (or the provider) is behind the session we expect: try once more, bypassing the cache.
+            refetched = True
+            fresh = _refetch_history(provider, sym, "5y")
+            if fresh is not None and fresh.value.index[-1].date() > base:
+                try:
+                    result, df, hist = _forecast_for(provider, sym, config.LOG_HORIZON)
+                except ApiError as exc:
+                    skip(sym, exc.code, base, refetched=True)
+                    continue
+                base = df.index[-1].date()
+        if base < expected:
+            skip(sym, "DATA_NOT_UPDATED", base, expected_base=expected_iso, refetched=refetched)
+            continue
+        lag = trading_days_between(base, now.date())
         if hist.stale or lag > 1:
             # Stale data could mean the outcome is already known (hindsight), so it is never logged.
-            # At most one business day behind: the previous session's close on a normal morning/weekend run.
-            skipped.append({"symbol": sym, "reason": "STALE_DATA"})
+            skip(sym, "STALE_DATA", base)
             continue
-        if not bar_is_final(base):
+        if base > expected or not bar_is_final(base, now):
             # Today's bar before the close is a partial intraday value, not a close: never log a base from it.
-            skipped.append({"symbol": sym, "reason": "PARTIAL_BAR"})
+            skip(sym, "PARTIAL_BAR", base)
             continue
         if store.add_prediction(record_from_forecast(result)):
             logged.append(sym)
+            results.append({"symbol": sym, "base_date": base.isoformat(), "status": "LOGGED"})
         else:
-            skipped.append({"symbol": sym, "reason": "ALREADY_LOGGED"})
+            skip(sym, "ALREADY_LOGGED", base)
+
+    present = store.symbols_with_base(expected_iso, config.LOG_HORIZON)
+    batch = {"base_date": expected_iso, "horizon_days": config.LOG_HORIZON,
+             "present": [s for s in config.LOG_SYMBOLS if s in present],
+             "missing": [s for s in config.LOG_SYMBOLS if s not in present]}
+    batch["complete"] = not batch["missing"]
 
     def history_for(sym: str):
         return _history(provider, sym, "5y").value["Close"]
 
     resolved = resolve_pending(store, history_for)
     cache.clear_prefix("plog")
-    log_event(log, "prediction_log_run", logged=len(logged), skipped=len(skipped), **resolved)
-    return {"logged": logged, "skipped": skipped, **resolved, "ran_at": now_iso()}
+    log_event(log, "prediction_log_run", logged=len(logged), skipped=len(skipped), expected_base=expected_iso,
+              batch_complete=batch["complete"], **resolved)
+    return {"logged": logged, "skipped": skipped, "expected_base": expected_iso, "results": results,
+            "expected_batch": batch, **resolved, "ran_at": now_iso()}
 
 
 @app.get("/api/prediction-log")
@@ -638,6 +703,7 @@ def prediction_log(limit: int = Query(25, ge=1, le=100), offset: int = Query(0, 
                 "scorecard": scorecard(rows, config.LOG_HORIZON), **store.verify_report(rows),
                 "hash_spec": hash_spec(),
                 "symbols": config.LOG_SYMBOLS, "horizon_days": config.LOG_HORIZON,
+                "missed_sessions": missed_sessions(config.LOG_SYMBOLS),
                 "storage": {"backend": store.backend, "durable": store.backend != "sqlite"}}
 
     got = cache.fetch(("plog", sym, status, limit, offset), config.PREDICTION_LOG_TTL_S, build)

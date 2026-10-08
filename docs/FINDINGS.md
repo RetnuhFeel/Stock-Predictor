@@ -187,7 +187,7 @@ Share of past outcomes that landed inside the claimed 80% range, replayed on the
 
 ## 7. How the live prediction log will be evaluated (placeholder: no results yet)
 
-**Status: no results yet.** The app records a fixed 5-day-horizon forecast for SPY, AAPL, MSFT, NVDA and TSLA each weekday (22:30 UTC) in a public, hash-chained log. The first predictions were made on 2026-10-01, so the first outcomes are due about 5 trading days later. **Nothing from the live log is reported here, and this page does not claim the model works.**
+**Status: no results yet.** The app records a fixed 5-day-horizon forecast for SPY, AAPL, MSFT, NVDA and TSLA each weekday (22:30 UTC) in a public, hash-chained log (a backup run before the next open retries a missed evening run). The first predictions were made on 2026-10-01, so the first outcomes are due about 5 trading days later. One session, 2026-10-02, was missed because the upstream data had not updated when the job ran; it is listed on the track-record page and deliberately not back-filled, since a forecast recorded after its outcome window has started would use hindsight. **Nothing from the live log is reported here, and this page does not claim the model works.**
 
 How it will be judged, using the app's existing scorecard (`backend/app/trackrecord.py`), written down *before* the data arrives:
 

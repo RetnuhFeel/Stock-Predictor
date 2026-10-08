@@ -8,6 +8,8 @@ const PAGE = 25;
 const pct = (x: number, d = 1) => `${x >= 0 ? "+" : ""}${(x * 100).toFixed(d)}%`;
 const money = (x: number) => `$${x.toFixed(2)}`;
 const day = (iso: string) => iso.slice(0, 10);
+const longDay = (iso: string) =>
+  new Date(`${iso}T12:00:00Z`).toLocaleDateString("en-US", { weekday: "short", year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
 
 function Outcome({ r }: { r: LogRow }) {
   if (r.status === "pending") return <span>Waiting (resolves after {r.horizon_days} trading days)</span>;
@@ -30,7 +32,7 @@ export function TrackRecord() {
       <section aria-labelledby="prereg" className="space-y-2">
         <h2 id="prereg">Pre-registered, not edited after the fact</h2>
         <p>
-          Once a day after the US market closes, a scheduled job records the model&apos;s {d?.horizon_days ?? 5}-trading-day forecast for a fixed list of tickers
+          Once a day after the US market closes (with a backup run early the next morning, before the market opens), a scheduled job records the model&apos;s {d?.horizon_days ?? 5}-trading-day forecast for a fixed list of tickers
           {d ? ` (${d.symbols.join(", ")})` : ""}. Each record is stored <strong>before</strong> the outcome exists, and is never changed afterwards: only the realised
           result is filled in once the horizon has passed. Each entry carries a hash chained to the one before it, so a quiet edit of an old row would break the
           chain{d && <> (chain check right now: <strong>{d.chain_ok ? "intact" : "BROKEN"}</strong>
@@ -81,6 +83,23 @@ export function TrackRecord() {
               </>
             )}
           </section>
+
+          {(d.missed_sessions?.length ?? 0) > 0 && (
+            <section aria-labelledby="missed" className="space-y-2">
+              <h2 id="missed">Missed days</h2>
+              <p className="text-sm">
+                Days with no recorded predictions are listed here rather than hidden. They are not filled in afterwards: a forecast written once its outcome period has
+                started would use hindsight.
+              </p>
+              <ul className="list-disc space-y-1 pl-5 text-sm">
+                {d.missed_sessions!.map((m) => (
+                  <li key={m.base_date}>
+                    <strong>{longDay(m.base_date)}</strong> ({m.symbols.length === d.symbols.length ? "all tickers" : m.symbols.join(", ")}): {m.note}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
 
           <section aria-labelledby="log" className="space-y-2">
             <h2 id="log">Prediction log</h2>

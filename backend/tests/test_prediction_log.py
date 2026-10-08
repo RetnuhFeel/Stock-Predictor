@@ -177,7 +177,8 @@ def test_task_skips_failures_and_stale(client, task, store, fake, monkeypatch):
     fake.history = lambda symbol, period: old
     monkeypatch.setattr(config, "LOG_SYMBOLS", ["AAPL"])
     body = client.post("/api/_tasks/run-prediction-log", headers=task).json()
-    assert body["logged"] == [] and body["skipped"][0]["reason"] == "STALE_DATA"
+    # behind the expected session even after a forced refetch: skipped, never logged from old data
+    assert body["logged"] == [] and body["skipped"][0]["reason"] == "DATA_NOT_UPDATED"
 
 
 def test_prediction_log_endpoint_empty_state_and_pagination(client, task, store):

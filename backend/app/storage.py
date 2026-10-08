@@ -299,6 +299,17 @@ class PredictionStore:
                 raise self._fail("add_prediction", exc, phase="query") from None
         return False  # unreachable
 
+    def symbols_with_base(self, base_date: str, horizon_days: int) -> set[str]:
+        """Symbols that already have a row for this (base date, horizon)."""
+        self._ensure()
+        try:
+            with self.engine.connect() as conn:
+                rows = conn.execute(select(predictions.c.symbol).where(
+                    predictions.c.base_date == base_date, predictions.c.horizon_days == horizon_days)).all()
+            return {r[0] for r in rows}
+        except SQLAlchemyError as exc:
+            raise self._fail("symbols_with_base", exc, phase="query") from None
+
     def pending(self) -> list[dict]:
         self._ensure()
         try:

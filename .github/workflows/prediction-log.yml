@@ -1,21 +1,31 @@
 name: Log and resolve predictions
 
-# Once per weekday after the US market close, ask the API to (1) record a prediction for the fixed ticker
-# allowlist and (2) fill in outcomes for older predictions whose horizon has passed.
+# Twice per weekday session, ask the API to (1) record a prediction for the fixed ticker allowlist and (2) fill in
+# outcomes for older predictions whose horizon has passed:
+#   * the main run after the US close records today's close;
+#   * a backup run early the next morning (before the open) records the same close if the main run was missed, ran
+#     before the data provider had published the close, or was dropped. It is harmless when the main run worked: the
+#     task is idempotent and then just reports the batch as already logged.
+# The API decides which session a run is for (`expected_base`: today's close after 16:10 New York time on a trading
+# day, otherwise the previous trading day's close) and never logs during market hours, so a late-starting backup run
+# cannot record a close whose outcome window has already begun. Cron times are UTC; both stay valid across DST:
+#   22:30 UTC = 6:30pm EDT / 5:30pm EST (after the close);  09:40 UTC = 5:40am EDT / 4:40am EST (before the open,
+#   with hours of slack for GitHub's delayed starts). The backup runs Tue-Sat, i.e. the morning after Mon-Fri.
 # Needs two repository settings (nothing is stored in the repo):
 #   Secrets  -> LOG_TASK_TOKEN   (must equal the LOG_TASK_TOKEN env var on the API service)
 #   Variables -> API_BASE_URL    (e.g. https://stock-predictor-api-2dnn.onrender.com)
 # If either is missing: on forks the job exits successfully with a warning annotation (forks have no such secrets);
 # on the upstream repo (RetnuhFeel/Stock-Predictor) it FAILS, so a lost secret cannot go unnoticed.
-# The job is also red when the API answers 200 but recorded nothing (every symbol skipped for a reason other than
-# ALREADY_LOGGED, e.g. the data provider is down): see .github/scripts/check-prediction-log-result.sh.
+# The job is red unless, after the run, the log holds the expected session's prediction for every symbol (logged now
+# or earlier): see .github/scripts/check-prediction-log-result.sh. A red evening run is retried by the morning run;
+# a red morning run means that session is a gap. Gaps are never back-filled (that would use hindsight); record them
+# in MISSED_SESSIONS in backend/app/trackrecord.py so the track-record page lists them.
 # GitHub scheduled runs are best-effort: they can be delayed or dropped, and are disabled after 60 days without repo
-# activity (re-enable in the Actions tab). A missed day leaves a gap in the track record; it is not back-filled,
-# because predictions are only logged from a final close and never from stale data. Trigger it manually
-# (workflow_dispatch) if you notice a gap on the same day.
+# activity (re-enable in the Actions tab). workflow_dispatch can be used any time outside market hours.
 on:
   schedule:
-    - cron: "30 22 * * 1-5"   # 22:30 UTC = 6:30pm EDT / 5:30pm EST, after the 4pm ET close
+    - cron: "30 22 * * 1-5"   # main: 22:30 UTC = 6:30pm EDT / 5:30pm EST, after the 4pm ET close
+    - cron: "40 9 * * 2-6"    # backup: 09:40 UTC = 5:40am EDT / 4:40am EST, Tue-Sat, before the 9:30am ET open
   workflow_dispatch:
 
 permissions:
