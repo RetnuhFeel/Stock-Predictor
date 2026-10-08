@@ -17,6 +17,28 @@ from .storage import HASH_FIELDS, RES_FIELDS, PredictionStore
 
 log = logging.getLogger("stock-api")
 
+# Sessions the live log has no predictions for, listed openly instead of being hidden. They are NEVER back-filled:
+# recording a forecast for an old session after the fact would use prices that were already known (hindsight), and
+# the hash-chained rows are never inserted out of order or edited. Add an entry when a scheduled run is missed.
+MISSED_SESSIONS: tuple[dict, ...] = (
+    {
+        "base_date": "2026-10-02",
+        "symbols": None,  # None = every symbol in the allowlist
+        "cause": "upstream_data_not_updated",
+        "note": ("No predictions were recorded for the close of Friday, Oct 2, 2026. The scheduled job ran that "
+                 "evening, but the data provider was still returning Thursday's prices, so there was nothing new to "
+                 "record. The gap is not filled in afterwards, because a forecast recorded once the outcome period has "
+                 "started would use hindsight."),
+        "backfilled": False,
+    },
+)
+
+
+def missed_sessions(symbols: list[str]) -> list[dict]:
+    """Public list of missed sessions, newest first, with the affected symbols spelled out."""
+    out = [{**m, "symbols": list(m["symbols"] or symbols)} for m in MISSED_SESSIONS]
+    return sorted(out, key=lambda m: m["base_date"], reverse=True)
+
 
 def record_from_forecast(result: dict) -> dict:
     """The row to log. It stores the pre-conformal band (``legacy_band``) on purpose: the live log was started with that

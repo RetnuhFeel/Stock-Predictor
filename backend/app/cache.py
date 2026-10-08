@@ -118,6 +118,13 @@ class TTLCache:
                     self._flights.pop(key, None)
                 flight.done.set()
 
+    def put(self, key: Any, value: Any, ttl: float, stale_max_age: float = 0) -> Fetched:
+        """Store ``value`` as freshly fetched now (used after a forced refetch that bypassed the cache)."""
+        now = time.time()
+        with self._lock:
+            self._store(key, ttl, now, value, stale_max_age)
+        return Fetched(value, now, False)
+
     def clear_prefix(self, prefix: str) -> None:
         """Drop entries whose key is a tuple starting with ``prefix``."""
         with self._lock:

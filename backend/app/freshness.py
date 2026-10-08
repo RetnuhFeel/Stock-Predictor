@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-from .marketcal import trading_days_between
+from .marketcal import is_trading_day, previous_trading_day, trading_days_between
 
 STALE_AFTER_BUSINESS_DAYS = 5  # a full week with no new bar suggests a problem (or a long closure)
 
@@ -52,6 +52,7 @@ def describe(last_bar: date, fetched_at: float, served_from_stale_cache: bool) -
 
 
 # --- market clock (used to refuse partial intraday bars) ---------------------------------------------------
+MARKET_OPEN_NY = time(9, 30)
 MARKET_CLOSE_NY = time(16, 0)
 CLOSE_BUFFER = timedelta(minutes=10)  # providers publish the final daily bar a little after the bell
 
@@ -72,3 +73,28 @@ def bar_is_final(bar_date: date, now: datetime | None = None) -> bool:
     if now.weekday() >= 5:  # a bar dated on a weekend cannot be a live session
         return True
     return now >= datetime.combine(now.date(), MARKET_CLOSE_NY, tzinfo=now.tzinfo) + CLOSE_BUFFER
+
+
+def _after_close(now: datetime) -> bool:
+    return now >= datetime.combine(now.date(), MARKET_CLOSE_NY, tzinfo=now.tzinfo) + CLOSE_BUFFER
+
+
+def expected_base_session(now: datetime | None = None) -> date:
+    """The session whose close the prediction log should be using right now (New York time).
+
+    On a trading day after the close (+ ``CLOSE_BUFFER``) that is today; at any other time (before the close, the
+    morning before the open, weekends, holidays) it is the previous trading day. Early-close days are treated like
+    normal days (conservative: today's bar only counts after 16:10)."""
+    now = now or now_ny()
+    if is_trading_day(now.date()) and _after_close(now):
+        return now.date()
+    return previous_trading_day(now.date())
+
+
+def session_in_progress(now: datetime | None = None) -> bool:
+    """True from the open until the close (+ buffer) on a trading day. Then the outcome window of the previous
+    session's close has already started, so logging that close as a new prediction would use hindsight."""
+    now = now or now_ny()
+    if not is_trading_day(now.date()):
+        return False
+    return datetime.combine(now.date(), MARKET_OPEN_NY, tzinfo=now.tzinfo) <= now and not _after_close(now)
