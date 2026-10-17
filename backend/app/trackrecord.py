@@ -31,6 +31,17 @@ MISSED_SESSIONS: tuple[dict, ...] = (
                  "started would use hindsight."),
         "backfilled": False,
     },
+    {
+        "base_date": "2026-10-15",
+        "symbols": ("SPY",),  # partial day: AAPL, MSFT, NVDA and TSLA were recorded normally
+        "cause": "upstream_data_not_updated",
+        "note": ("No SPY prediction was recorded for the close of Thursday, Oct 15, 2026. The evening run recorded the "
+                 "other four tickers, but the data provider was still returning Wednesday's SPY price, even after a "
+                 "fresh request. The morning retry started only after the market had opened, when nothing can be "
+                 "recorded any more. The gap is not filled in afterwards, because a forecast recorded once the outcome "
+                 "period has started would use hindsight."),
+        "backfilled": False,
+    },
 )
 
 

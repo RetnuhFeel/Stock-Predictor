@@ -164,7 +164,17 @@ def test_missed_sessions_are_listed_publicly_without_touching_the_log(client, st
     assert "not filled in" in m["note"] and "hindsight" in m["note"]
     assert store.all_rows() == before and b["chain_ok"] is True
     assert all(r["base_date"] != "2026-10-02" for r in b["items"])
-    assert [x["base_date"] for x in MISSED_SESSIONS] == ["2026-10-02"]
+    assert [x["base_date"] for x in MISSED_SESSIONS] == ["2026-10-02", "2026-10-15"]
+    assert [x["base_date"] for x in b["missed_sessions"]] == ["2026-10-15", "2026-10-02"]  # newest first
+
+
+def test_partial_missed_session_lists_only_the_missing_symbol(client, store):
+    b = client.get("/api/prediction-log").json()
+    m = {x["base_date"]: x for x in b["missed_sessions"]}["2026-10-15"]
+    assert m["symbols"] == ["SPY"] and m["backfilled"] is False and m["cause"] == "upstream_data_not_updated"
+    assert "SPY" in m["note"] and "hindsight" in m["note"] and "not filled in" in m["note"]
+    for entry in MISSED_SESSIONS:  # symbols: None (all) or a non-empty subset of the allowlist
+        assert entry["symbols"] is None or (entry["symbols"] and set(entry["symbols"]) <= set(config.LOG_SYMBOLS))
 
 
 # ---------- the workflow's result check
