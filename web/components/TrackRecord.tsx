@@ -88,13 +88,13 @@ export function TrackRecord() {
             <section aria-labelledby="missed" className="space-y-2">
               <h2 id="missed">Missed days</h2>
               <p className="text-sm">
-                Days with no recorded predictions are listed here rather than hidden. They are not filled in afterwards: a forecast written once its outcome period has
+                Days with no recorded predictions, or with some tickers missing, are listed here rather than hidden. They are not filled in afterwards: a forecast written once its outcome period has
                 started would use hindsight.
               </p>
               <ul className="list-disc space-y-1 pl-5 text-sm">
                 {d.missed_sessions!.map((m) => (
                   <li key={m.base_date}>
-                    <strong>{longDay(m.base_date)}</strong> ({m.symbols.length === d.symbols.length ? "all tickers" : m.symbols.join(", ")}): {m.note}
+                    <strong>{longDay(m.base_date)}</strong> ({m.symbols.length === d.symbols.length ? "all tickers" : `${m.symbols.join(", ")} only`}): {m.note}
                   </li>
                 ))}
               </ul>
