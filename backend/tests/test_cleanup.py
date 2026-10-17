@@ -227,7 +227,12 @@ def test_workflows_and_blueprint_are_valid_yaml_and_safe():
         assert isinstance(yaml.safe_load(p.read_text()), dict), p.name
     bp = yaml.safe_load((_ROOT / "render.yaml").read_text())
     names = {s["name"] for s in bp["services"]}
-    assert names == {"stock-predictor-api", "stock-predictor-web"}
+    assert names == {"stock-predictor-api", "stock-predictor-web", "stock-predictor-log-cron"}
+    cron = next(s for s in bp["services"] if s["name"] == "stock-predictor-log-cron")
+    assert cron["type"] == "cron" and cron["schedule"] == "*/20 * * * *"
+    assert cron["startCommand"] == "python backend/scripts/scheduled_log.py"
+    cenv = {e["key"]: e for e in cron["envVars"]}
+    assert cenv["LOG_TASK_TOKEN"].get("sync") is False and "value" not in cenv["LOG_TASK_TOKEN"]
     api = next(s for s in bp["services"] if s["name"] == "stock-predictor-api")
     env = {e["key"]: e for e in api["envVars"]}
     assert env["TRUST_PROXY"]["value"] == "true" and env["TRUSTED_PROXY_HOPS"]["value"] == "1"
