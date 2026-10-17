@@ -48,3 +48,26 @@ services:
     envVars:
       - key: NEXT_PUBLIC_API_BASE_URL   # inlined into the browser bundle at BUILD time (Docker build arg)
         value: https://stock-predictor-api-2dnn.onrender.com
+
+  # PRIMARY prediction-log scheduler (GitHub's crons were starting 2-7.5 h late; they stay as extra attempts).
+  # Runs every 20 min (UTC); backend/scripts/scheduled_log.py does the New York-time gating (trading days only,
+  # 16:30-24:00 and 00:00-09:10 the morning after a session, so DST needs nothing here) and exits non-zero when the
+  # expected batch is still missing at the 08:50 ET deadline: enable failure notifications for this job in Render.
+  # Cron jobs have no free plan: starter is billed per second of runtime with a $1/month minimum.
+  - type: cron
+    name: stock-predictor-log-cron
+    runtime: python
+    plan: starter
+    region: oregon
+    schedule: "*/20 * * * *"
+    buildCommand: pip install -c backend/requirements.lock numpy pandas
+    startCommand: python backend/scripts/scheduled_log.py
+    buildFilter:
+      paths: [backend/scripts/**, backend/app/marketcal.py, backend/requirements.lock]
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.11"
+      - key: API_BASE_URL
+        value: https://stock-predictor-api-2dnn.onrender.com
+      - key: LOG_TASK_TOKEN          # same value as on stock-predictor-api and the GitHub secret
+        sync: false

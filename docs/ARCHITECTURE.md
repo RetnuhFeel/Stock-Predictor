@@ -40,7 +40,7 @@ flowchart LR
         LOG --> DB
     end
 
-    GHA["GitHub Actions cron<br/>after US close + morning backup"] -- "POST /api/_tasks/run-prediction-log<br/>(bearer token)" --> API
+    GHA["Render cron (primary, every 20 min)<br/>+ GitHub Actions cron (extra attempts)"] -- "POST /api/_tasks/run-prediction-log<br/>(bearer token)" --> API
 
     PROV --> YF["yfinance (default)"]
     PROV --> TD["Twelve Data (API key)"]

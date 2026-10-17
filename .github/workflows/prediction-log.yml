@@ -21,7 +21,10 @@ name: Log and resolve predictions
 # a red morning run means that session is a gap. Gaps are never back-filled (that would use hindsight); record them
 # in MISSED_SESSIONS in backend/app/trackrecord.py so the track-record page lists them.
 # GitHub scheduled runs are best-effort: they can be delayed or dropped, and are disabled after 60 days without repo
-# activity (re-enable in the Actions tab). workflow_dispatch can be used any time outside market hours.
+# activity (re-enable in the Actions tab). In Oct 2026 they routinely started 2-7.5 hours late (the 09:40 UTC backup
+# ran around midday ET, inside market hours, where the API refuses to log), so the PRIMARY scheduler is now the
+# Render cron job `stock-predictor-log-cron` (backend/scripts/scheduled_log.py, every 20 min, 08:50 ET missing-batch
+# alarm). These GitHub crons stay as extra attempts. workflow_dispatch can be used any time outside market hours.
 on:
   schedule:
     - cron: "30 22 * * 1-5"   # main: 22:30 UTC = 6:30pm EDT / 5:30pm EST, after the 4pm ET close
@@ -38,7 +41,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 75   # room for up to 3 x 20 min waits after DATA_NOT_UPDATED
     env:
       API_BASE_URL: ${{ vars.API_BASE_URL }}
       LOG_TASK_TOKEN: ${{ secrets.LOG_TASK_TOKEN }}
@@ -59,17 +62,26 @@ jobs:
             exit 0
           fi
           url="${API_BASE_URL%/}/api/_tasks/run-prediction-log"
-          # A cold start on the free tier can take about a minute, so allow 120s per attempt and retry.
-          for attempt in 1 2 3 4; do
-            code=$(curl -sS -o /tmp/out.json -w '%{http_code}' -m 120 -X POST \
-              -H "Authorization: Bearer $LOG_TASK_TOKEN" "$url" || echo 000)
-            echo "attempt $attempt: HTTP $code"
-            if [ "$code" = "200" ]; then
-              cat /tmp/out.json; echo
-              exec .github/scripts/check-prediction-log-result.sh /tmp/out.json
+          # If the provider has not published the expected close yet (expected batch incomplete and a symbol skipped
+          # as DATA_NOT_UPDATED), wait 20 minutes and call again, up to 3 more rounds (job timeout 75 min).
+          for round in 0 1 2 3; do
+            ok=""
+            # A cold start on the free tier can take about a minute, so allow 120s per attempt and retry.
+            for attempt in 1 2 3 4; do
+              code=$(curl -sS -o /tmp/out.json -w '%{http_code}' -m 120 -X POST \
+                -H "Authorization: Bearer $LOG_TASK_TOKEN" "$url" || echo 000)
+              echo "round $round attempt $attempt: HTTP $code"
+              if [ "$code" = "200" ]; then ok=1; cat /tmp/out.json; echo; break; fi
+              [ "$code" = "401" ] || [ "$code" = "404" ] && { echo "::error::Task rejected (HTTP $code): check LOG_TASK_TOKEN on both sides."; cat /tmp/out.json; exit 1; }
+              sleep 30
+            done
+            [ -n "$ok" ] || break
+            if [ "$round" -lt 3 ] && jq -e '(.expected_batch.missing // []) != [] and any(.skipped[]?; .reason == "DATA_NOT_UPDATED")' /tmp/out.json >/dev/null; then
+              echo "::notice::Expected close not published yet (DATA_NOT_UPDATED); retrying in 20 minutes."
+              sleep 1200
+              continue
             fi
-            [ "$code" = "401" ] || [ "$code" = "404" ] && { echo "::error::Task rejected (HTTP $code): check LOG_TASK_TOKEN on both sides."; cat /tmp/out.json; exit 1; }
-            sleep 30
+            exec .github/scripts/check-prediction-log-result.sh /tmp/out.json
           done
           echo "::error::Prediction-log task failed after retries."
           cat /tmp/out.json 2>/dev/null || true
