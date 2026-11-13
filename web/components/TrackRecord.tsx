@@ -33,6 +33,15 @@ export function bandLabel(method: string | null | undefined): string {
   return method;
 }
 
+const CHAIN_REASONS: Record<string, string> = {
+  prev_hash_mismatch: "an entry does not link to the one before it",
+  entry_hash_mismatch: "an entry no longer matches its hash (edited after it was written)",
+  unknown_hash_version: "an entry names an unknown hash rule",
+  v1_with_v2_fields: "an old-format entry carries fields its hash does not cover",
+  v1_after_v2: "an old-format entry was written after the log switched to the new format",
+};
+export const chainReason = (r: string) => CHAIN_REASONS[r] ?? r;
+
 function PeriodRow({ p }: { p: ScorePeriod }) {
   const when = p.first_base_date ? `${p.first_base_date} to ${p.last_base_date}` : "";
   return (
@@ -63,7 +72,7 @@ export function TrackRecord() {
           Once a day after the US market closes (with a backup run early the next morning, before the market opens), a scheduled job records the model&apos;s {d?.horizon_days ?? 5}-trading-day forecast for a fixed list of tickers
           {d ? ` (${d.symbols.join(", ")})` : ""}. Each record is stored <strong>before</strong> the outcome exists, and is never changed afterwards: only the realised
           result is filled in once the horizon has passed. Each entry carries a hash chained to the one before it, so a quiet edit of an old row would break the
-          chain{d && <> (chain check right now: <strong>{d.chain_ok ? "intact" : "BROKEN"}</strong>
+          chain{d && <> (chain check right now: <strong>{d.chain_ok ? "intact" : "BROKEN"}</strong>{!d.chain_ok && d.chain_error ? ` at entry #${d.chain_error.row_id ?? "?"}: ${chainReason(d.chain_error.reason)}` : ""}
           {d.outcomes_ok !== undefined && <>; outcome seals: <strong>{d.outcomes_ok ? "intact" : "BROKEN"}</strong>{d.unsealed_resolved ? `, ${d.unsealed_resolved} older result${d.unsealed_resolved === 1 ? "" : "s"} predate seals` : ""}</>})</>}.
         </p>
         <p className="text-xs">

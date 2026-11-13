@@ -156,6 +156,32 @@ def _v1_with_v2_fields(row: dict) -> bool:
     return (row.get("hash_version") or 1) == 1 and any(row.get(k) is not None for k in V2_ONLY_FIELDS)
 
 
+CHAIN_ERRORS = {
+    "prev_hash_mismatch": "a row does not link to the row before it",
+    "entry_hash_mismatch": "a row's contents do not match its hash (edited after it was written)",
+    "unknown_hash_version": "a row names a hash rule this code does not know",
+    "v1_with_v2_fields": "an old-format (v1) row carries v2-only fields, which its hash does not cover",
+    "v1_after_v2": "an old-format (v1) row was written after the log switched to v2",
+}
+
+
+def entry_problem(prev: str, row: dict, seen_v2: bool) -> str | None:
+    """Why ``row`` breaks the entry chain (a key of ``CHAIN_ERRORS``), or None if it is fine. ``seen_v2``: an earlier
+    row already used the v2 rule. The switch is one-way: once a v2 row exists, every later row must be v2 too."""
+    if row["prev_hash"] != prev:
+        return "prev_hash_mismatch"
+    try:
+        if row["entry_hash"] != compute_hash(prev, row):
+            return "entry_hash_mismatch"
+    except UnknownHashVersion:
+        return "unknown_hash_version"
+    if _v1_with_v2_fields(row):
+        return "v1_with_v2_fields"
+    if seen_v2 and (row.get("hash_version") or 1) == 1:
+        return "v1_after_v2"
+    return None
+
+
 def compute_res_hash(res_prev: str, entry_hash: str, row: dict) -> str:
     """Seal over an outcome: previous seal + the entry it belongs to + the outcome fields."""
     payload = json.dumps([row[k] for k in RES_FIELDS], separators=(",", ":"), default=str)
@@ -321,7 +347,10 @@ class PredictionStore:
                     last = conn.execute(
                         select(predictions.c.entry_hash).order_by(predictions.c.id.desc()).limit(1)).first()
                     prev = last[0] if last else GENESIS
-                    row = {**rec, "made_at": rec.get("made_at") or now_iso()}
+                    # new code always writes the current rule, whatever the caller passed: it can never append an
+                    # old-format row after a v2 row (which verification rejects as ``v1_after_v2``)
+                    row = {**dict.fromkeys(V2_ONLY_FIELDS), **rec, "made_at": rec.get("made_at") or now_iso(),
+                           "hash_version": HASH_VERSION_CURRENT}
                     conn.execute(insert(predictions).values(**row, prev_hash=prev,
                                                             entry_hash=compute_hash(prev, row), status="pending"))
                     return True
@@ -416,16 +445,13 @@ class PredictionStore:
         outcome seals existed still verifies). ``outcomes_ok`` checks the outcome seals of rows that have one;
         resolved rows that predate the seal are counted in ``unsealed_resolved`` (their outcomes are not covered)."""
         rows = self.all_rows() if rows is None else rows
-        chain_ok, prev = True, GENESIS
+        chain_ok, prev, chain_error, seen_v2 = True, GENESIS, None, False
         for r in rows:
-            try:
-                ok = (r["prev_hash"] == prev and r["entry_hash"] == compute_hash(prev, r)
-                      and not _v1_with_v2_fields(r))
-            except UnknownHashVersion:
-                ok = False
-            if not ok:
-                chain_ok = False
+            reason = entry_problem(prev, r, seen_v2)
+            if reason:
+                chain_ok, chain_error = False, {"reason": reason, "row_id": r.get("id")}
                 break
+            seen_v2 = seen_v2 or r.get("hash_version") == 2
             prev = r["entry_hash"]
         outcomes_ok, unsealed, res_prev, seq = True, 0, GENESIS, 0
         sealed = sorted((r for r in rows if r.get("res_seq") is not None), key=lambda r: r["res_seq"])
@@ -441,13 +467,13 @@ class PredictionStore:
                 outcomes_ok = False
                 break
             res_prev = r["res_hash"]
-        return {"chain_ok": chain_ok, "outcomes_ok": outcomes_ok, "unsealed_resolved": unsealed,
-                "sealed_resolved": len(sealed)}
+        return {"chain_ok": chain_ok, "chain_error": chain_error, "outcomes_ok": outcomes_ok,
+                "unsealed_resolved": unsealed, "sealed_resolved": len(sealed)}
 
     @staticmethod
     def hash_versions(rows: list[dict]) -> dict:
-        """Informational: how many rows use each hash rule and where the log switched. A v1 row after the first v2
-        row still verifies (e.g. an older instance writing during a deploy), but it is counted so it is visible."""
+        """How many rows use each hash rule and where the log switched. ``v1_after_v2`` counts v1 rows after the first
+        v2 row; any such row makes ``verify_report`` fail (reason ``v1_after_v2``), so this should always be 0."""
         versions = [r.get("hash_version") or 1 for r in rows]
         first_v2 = next((r["id"] for r, v in zip(rows, versions, strict=True) if v == 2), None)
         return {"v1": versions.count(1), "v2": versions.count(2), "first_v2_id": first_v2,

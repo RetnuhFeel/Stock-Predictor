@@ -278,6 +278,8 @@ export type PredictionLog = Freshness & {
   offset: number;
   scorecard: Scorecard;
   chain_ok: boolean;
+  /** Why the entry chain failed (null when intact; absent from older API versions). */
+  chain_error?: { reason: string; row_id: number | null } | null;
   outcomes_ok?: boolean;
   unsealed_resolved?: number;
   /** Dated switch of the logged band (absent from older API versions). */

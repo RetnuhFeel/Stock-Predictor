@@ -15,7 +15,7 @@ from .conformal import wilson_interval
 from .forecast import MIN_INDEPENDENT_TESTS, ratio, skill_ci_sq
 from .freshness import bar_is_final
 from .observability import log_event
-from .storage import HASH_FIELDS, HASH_FIELDS_V2, HASH_VERSION_CURRENT, RES_FIELDS, PredictionStore
+from .storage import CHAIN_ERRORS, HASH_FIELDS, HASH_FIELDS_V2, HASH_VERSION_CURRENT, RES_FIELDS, PredictionStore
 
 log = logging.getLogger("stock-api")
 
@@ -251,7 +251,9 @@ def hash_spec() -> dict:
         "entry_hash_v2": "rows with hash_version 2: sha256(prev_hash + json.dumps(['v2'] + [row[f] for f in "
                          "entry_fields_v2], separators=(',',':'), default=str)); rows with hash_version null or 1 "
                          "use entry_hash above. Both rules chain through prev_hash, so v1 rows followed by v2 rows "
-                         "form one chain",
+                         "form one chain. The switch is one-way: a v1 row after any v2 row fails "
+                         "(chain_error.reason 'v1_after_v2')",
+        "chain_errors": dict(CHAIN_ERRORS),
         "entry_fields_v2": list(HASH_FIELDS_V2),
         "res_hash": "sha256(res_prev_hash + entry_hash + json.dumps([row[f] for f in outcome_fields], "
                     "separators=(',',':'), default=str)); res_seq counts 1,2,3... in resolution order, "

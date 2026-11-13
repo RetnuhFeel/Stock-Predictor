@@ -101,7 +101,8 @@ def test_new_activity_on_a_migrated_legacy_db_chains_correctly(tmp_path):
     pend = [r for r in st.pending() if r["symbol"] == "SPY"][0]
     assert st.resolve(pend["id"], "2026-09-09", 103.0, 0.03) is True  # first seal is res_seq 1
     rep = st.verify_report()
-    assert rep == {"chain_ok": True, "outcomes_ok": True, "unsealed_resolved": 2, "sealed_resolved": 1}
+    assert rep == {"chain_ok": True, "chain_error": None, "outcomes_ok": True, "unsealed_resolved": 2,
+                   "sealed_resolved": 1}
     assert [r["res_seq"] for r in st.all_rows() if r["res_seq"]] == [1]
     st.close()
 
@@ -131,7 +132,7 @@ def resolved_store(store):
 
 def test_resolution_edit_is_detected_but_entry_chain_stays_valid(store):
     resolved_store(store)
-    assert store.verify_report() == {"chain_ok": True, "outcomes_ok": True, "unsealed_resolved": 0,
+    assert store.verify_report() == {"chain_ok": True, "chain_error": None, "outcomes_ok": True, "unsealed_resolved": 0,
                                      "sealed_resolved": 3}
     with store.engine.begin() as conn:
         conn.execute(text("UPDATE predictions SET realized_return = -0.2 WHERE id = 2"))

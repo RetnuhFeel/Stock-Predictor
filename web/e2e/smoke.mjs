@@ -298,6 +298,11 @@ for (const scheme of ["light", "dark"]) {
   ok((await page.locator("section[aria-labelledby=scorecard] table").nth(1).locator("tbody tr").count()) === 2, `[${scheme}] coverage reported per period`);
   ok((await page.locator("section[aria-labelledby=log] tbody tr").first().innerText()).includes("legacy band"), `[${scheme}] row shows the band it logged`);
   await axe(page, `[${scheme}] /track-record (populated)`);
+  globalThis.__log = { ...fullLog, chain_ok: false, chain_error: { reason: "v1_after_v2", row_id: 2 } };
+  await page.goto(`${WEB}/track-record`);
+  await page.getByText(/Too early to say/).waitFor({ timeout: 15000 });
+  ok(await page.getByText(/BROKEN at entry #2: an old-format entry was written after the log switched/).isVisible(), `[${scheme}] broken chain names its reason`);
+  globalThis.__log = fullLog;
   for (const path of ["/terms", "/privacy"]) { await page.goto(`${WEB}${path}`); await axe(page, `[${scheme}] ${path}`); }
   ok(errors.length === 0, `[${scheme}] no uncaught page errors ${errors.join("; ")}`);
   await context.close();
