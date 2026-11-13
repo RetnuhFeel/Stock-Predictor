@@ -103,11 +103,22 @@ def test_legacy_band_is_kept_and_reproduced():
     assert v["path"][0]["mid"] == f["path"][0]["mid"]
 
 
-def test_prediction_log_keeps_the_pre_conformal_interval():
+def test_prediction_log_keeps_the_pre_conformal_interval_before_the_cutover(monkeypatch):
     f = {**forecast(synthetic_prices(900, seed=12)["Close"], 5), "symbol": "TST"}
+    monkeypatch.setattr(config, "LOG_CONFORMAL_FROM", "9999-12-31")  # base date before the cutover
     rec = record_from_forecast(f)
     assert (rec["interval_low"], rec["interval_high"]) == (f["legacy_band"]["low"], f["legacy_band"]["high"])
     assert (rec["interval_low"], rec["interval_high"]) != (f["interval_80"]["low"], f["interval_80"]["high"])
+    assert rec["band_method"] == "legacy_band" and rec["hash_version"] == 2
+
+
+def test_prediction_log_uses_the_forecast_range_from_the_cutover(monkeypatch):
+    f = {**forecast(synthetic_prices(900, seed=12)["Close"], 5), "symbol": "TST"}
+    monkeypatch.setattr(config, "LOG_CONFORMAL_FROM", f["last_date"])  # the cutover day itself is conformal
+    rec = record_from_forecast(f)
+    assert (rec["interval_low"], rec["interval_high"]) == (f["interval_80"]["low"], f["interval_80"]["high"])
+    assert rec["band_method"] == f["interval_method_name"] == "split_conformal"
+    assert rec["model_version"].startswith(config.MODEL_ID + "@")
 
 
 def test_short_history_falls_back_and_says_why():

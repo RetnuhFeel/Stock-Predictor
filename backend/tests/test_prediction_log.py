@@ -48,7 +48,8 @@ def test_resolve_once_and_prediction_fields_untouched(store):
     assert after["predicted_return"] == row["predicted_return"] and after["entry_hash"] == row["entry_hash"]
     assert store.verify_chain() is True  # entry chain untouched by resolution
     rep = store.verify_report()
-    assert rep == {"chain_ok": True, "outcomes_ok": True, "unsealed_resolved": 0, "sealed_resolved": 1}
+    assert rep == {"chain_ok": True, "chain_error": None, "outcomes_ok": True, "unsealed_resolved": 0,
+                   "sealed_resolved": 1}
 
 
 def test_pagination_filters(store):

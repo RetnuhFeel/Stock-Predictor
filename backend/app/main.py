@@ -57,6 +57,7 @@ from .spikes import spike_forecast
 from .storage import PredictionStore, now_iso
 from .symbols import normalize_symbol
 from .trackrecord import (
+    band_cutover,
     hash_spec,
     missed_sessions,
     public_row,
@@ -710,6 +711,8 @@ def prediction_log(limit: int = Query(25, ge=1, le=100), offset: int = Query(0, 
         rows = store.all_rows()
         return {"items": [public_row(r) for r in pg.items], "total": pg.total, "limit": limit, "offset": offset,
                 "scorecard": scorecard(rows, config.LOG_HORIZON), **store.verify_report(rows),
+                "band_cutover": band_cutover(rows),
+                "hash_versions": store.hash_versions(rows),
                 "hash_spec": hash_spec(),
                 "symbols": config.LOG_SYMBOLS, "horizon_days": config.LOG_HORIZON,
                 "missed_sessions": missed_sessions(config.LOG_SYMBOLS),

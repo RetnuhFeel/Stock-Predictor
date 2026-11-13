@@ -10,11 +10,12 @@ import logging
 import numpy as np
 import pandas as pd
 
+from . import config
 from .conformal import wilson_interval
 from .forecast import MIN_INDEPENDENT_TESTS, ratio, skill_ci_sq
 from .freshness import bar_is_final
 from .observability import log_event
-from .storage import HASH_FIELDS, RES_FIELDS, PredictionStore
+from .storage import CHAIN_ERRORS, HASH_FIELDS, HASH_FIELDS_V2, HASH_VERSION_CURRENT, RES_FIELDS, PredictionStore
 
 log = logging.getLogger("stock-api")
 
@@ -58,12 +59,35 @@ def missed_sessions(symbols: list[str]) -> list[dict]:
     return sorted(out, key=lambda m: m["base_date"], reverse=True)
 
 
+BAND_LEGACY = "legacy_band"  # band_method of new rows that still log the legacy band (base date before the cutover)
+INTERVAL_METHOD_CONFORMAL = ("the forecast's own 80% range from the cutover on: split conformal when its coverage "
+                             "check passes, otherwise the fallback it names (band_method per row)")
+
+
+def model_version() -> str:
+    """Model id plus the deployed code commit, e.g. 'gbm-v1@2499b36da2c1' (or 'gbm-v1@unknown' locally)."""
+    return f"{config.MODEL_ID}@{config.CODE_COMMIT or 'unknown'}"
+
+
+def band_period(row: dict) -> str:
+    """'legacy' for rows that logged the legacy band (all v1 rows, v2 rows before the cutover); else 'conformal'."""
+    return "legacy" if row.get("band_method") in (None, BAND_LEGACY) else "conformal"
+
+
 def record_from_forecast(result: dict) -> dict:
-    """The row to log. It stores the pre-conformal band (``legacy_band``) on purpose: the live log was started with that
-    interval, and switching the method mid-series would silently change what its coverage scorecard measures."""
+    """The row to log (hash rule v2: it also records the model version and which band it logged).
+
+    Before ``config.LOG_CONFORMAL_FROM`` it stores the pre-conformal band (``legacy_band``), the interval the live log
+    was started with. From that base date on it stores the forecast's own 80% range (``interval_80``: split conformal
+    when its check passes, else the fallback named in ``interval_method_name``). The switch is dated and recorded per
+    row, so the scorecard can judge each period against the band it actually logged."""
     bt = result["backtest"]
-    band = result.get("legacy_band") or result["interval_80"]
+    if result["last_date"] >= config.LOG_CONFORMAL_FROM:
+        band, method = result["interval_80"], result.get("interval_method_name") or "unknown"
+    else:
+        band, method = result.get("legacy_band") or result["interval_80"], BAND_LEGACY
     return {
+        "hash_version": HASH_VERSION_CURRENT, "model_version": model_version(), "band_method": method,
         "symbol": result["symbol"], "horizon_days": result["horizon_days"],
         "base_date": result["last_date"], "base_close": float(result["last_close"]),
         "predicted_return": float(result["predicted_return"]),
@@ -135,6 +159,11 @@ def scorecard(rows: list[dict], horizon: int | None = None) -> dict:
            # windows are correlated), so a handful of results cannot look like a precise number.
            "interval_coverage_ci_90": list(wilson_interval(float(cover), float(n_indep))),
            "interval_method": INTERVAL_METHOD}
+    periods = band_periods(rows, horizon)
+    if len(periods) > 1:
+        out["interval_method"] = ("mixed: each row is scored against the band it logged; the legacy and conformal "
+                                  "periods are reported separately in 'periods'")
+    out["periods"] = periods
     if n_indep < MIN_INDEPENDENT_TESTS:
         out.update(verdict="too_early", skill_ci_90=None)
         return out
@@ -147,10 +176,58 @@ def scorecard(rows: list[dict], horizon: int | None = None) -> dict:
     return out
 
 
+def _in_band(r: dict) -> bool:
+    """Did the realised price land inside the band THIS row logged (whatever method that was)?"""
+    return bool(r["interval_low"] <= r["base_close"] * np.exp(r["realized_return"]) <= r["interval_high"])
+
+
+def band_periods(rows: list[dict], horizon: int | None = None) -> list[dict]:
+    """The scorecard split by the band each row logged: 'legacy' (the band the log started with) and, from the dated
+    cutover, 'conformal'. Each period is judged only on its own rows, against the band those rows stored, so the switch
+    never mixes two methods into one coverage number. No verdict per period: the overall verdict rule still applies."""
+    out = []
+    for name in ("legacy", "conformal"):
+        mine = [r for r in rows if band_period(r) == name and (horizon is None or r["horizon_days"] == horizon)]
+        if not mine:
+            continue
+        res = [r for r in mine if r["status"] == "resolved"]
+        dates = sorted({r["base_date"] for r in mine if r.get("base_date")}) or [None]
+        h = horizon or max(1, int(np.median([r["horizon_days"] for r in mine])))
+        p = {"band": name, "interval_method": INTERVAL_METHOD if name == "legacy" else INTERVAL_METHOD_CONFORMAL,
+             "first_base_date": dates[0], "last_base_date": dates[-1], "n_resolved": len(res),
+             "n_pending": len(mine) - len(res), "band_methods": sorted({r.get("band_method") or "legacy (v1 row)"
+                                                                          for r in mine})}
+        if name == "conformal":
+            p["n_fallback"] = sum(r.get("band_method") != "split_conformal" for r in mine)
+        if res:
+            res_dates = sorted({r["base_date"] for r in res})
+            n_ind = max(len(res_dates) // h, 1)
+            cover = float(np.mean([_in_band(r) for r in res]))
+            pred = np.array([r["predicted_return"] for r in res])
+            real = np.array([r["realized_return"] for r in res])
+            by_date = [[i for i, r in enumerate(res) if r["base_date"] == d] for d in res_dates]
+            m_sq = np.array([np.mean((real[ix] - pred[ix]) ** 2) for ix in by_date])
+            b_sq = np.array([np.mean(real[ix] ** 2) for ix in by_date])
+            p.update({"n_dates": len(res_dates), "n_independent": n_ind, "interval_coverage": cover,
+                      "interval_coverage_ci_90": list(wilson_interval(cover, float(n_ind))),
+                      "hit_rate": float(np.mean(np.sign(pred) == np.sign(real))), "up_rate": float(np.mean(real > 0)),
+                      "skill_vs_naive": 1 - ratio(float(np.sqrt(m_sq.mean())), float(np.sqrt(b_sq.mean()))),
+                      "interval_mean_width_pct": float(np.mean(
+                          [(r["interval_high"] - r["interval_low"]) / r["base_close"] for r in res]) * 100)})
+        out.append(p)
+    return out
+
+
+def band_cutover(rows: list[dict]) -> dict:
+    """The configured cutover date and the first base date that actually logged a conformal-period band."""
+    first = min((r["base_date"] for r in rows if band_period(r) == "conformal"), default=None)
+    return {"configured_from": config.LOG_CONFORMAL_FROM, "first_conformal_base_date": first}
+
+
 PUBLIC_KEYS = ("id", "symbol", "horizon_days", "made_at", "base_date", "base_close", "predicted_return",
                "interval_low", "interval_high", "backtest_skill", "backtest_verdict", "model", "status",
                "resolved_at", "realized_date", "realized_close", "realized_return", "prev_hash", "entry_hash",
-               "res_seq", "res_prev_hash", "res_hash")
+               "res_seq", "res_prev_hash", "res_hash", "hash_version", "model_version", "band_method")
 
 
 def public_row(r: dict) -> dict:
@@ -171,9 +248,18 @@ def hash_spec() -> dict:
         "entry_hash": "sha256(prev_hash + json.dumps([row[f] for f in entry_fields], separators=(',',':'), "
                       "default=str)); prev_hash = entry_hash of the previous row by id (genesis for the first)",
         "entry_fields": list(HASH_FIELDS),
+        "entry_hash_v2": "rows with hash_version 2: sha256(prev_hash + json.dumps(['v2'] + [row[f] for f in "
+                         "entry_fields_v2], separators=(',',':'), default=str)); rows with hash_version null or 1 "
+                         "use entry_hash above. Both rules chain through prev_hash, so v1 rows followed by v2 rows "
+                         "form one chain. The switch is one-way: a v1 row after any v2 row fails "
+                         "(chain_error.reason 'v1_after_v2')",
+        "chain_errors": dict(CHAIN_ERRORS),
+        "entry_fields_v2": list(HASH_FIELDS_V2),
         "res_hash": "sha256(res_prev_hash + entry_hash + json.dumps([row[f] for f in outcome_fields], "
                     "separators=(',',':'), default=str)); res_seq counts 1,2,3... in resolution order, "
                     "res_prev_hash is the previous sealed outcome's res_hash (genesis for res_seq 1)",
         "outcome_fields": list(RES_FIELDS),
-        "note": "Rows resolved before outcome seals existed have null res_* fields (reported as unsealed_resolved).",
+        "note": ("Rows resolved before outcome seals existed have null res_* fields (reported as unsealed_resolved). "
+                 "Rows written before the v2 rule (Nov 2026) have null hash_version, model_version and band_method "
+                 "and verify with the original rule."),
     }

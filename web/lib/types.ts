@@ -222,6 +222,11 @@ export type LogRow = {
   realized_close: number | null;
   realized_return: number | null;
   entry_hash: string;
+  /** Hash rule of the row: null/absent = v1 (rows before Nov 2026), 2 = v2 (also covers model_version, band_method). */
+  hash_version?: number | null;
+  model_version?: string | null;
+  /** Which 80% band this row logged: "legacy_band", "split_conformal" or a named fallback; null on v1 rows (legacy). */
+  band_method?: string | null;
   in_interval?: boolean;
   direction_correct?: boolean;
 };
@@ -245,6 +250,26 @@ export type Scorecard = {
   interval_coverage_ci_90?: [number, number];
   /** Which band was logged (the pre-conformal band, not the forecast page's conformal range). */
   interval_method?: string;
+  /** The scorecard split by the band each row logged (absent from older API versions). */
+  periods?: ScorePeriod[];
+};
+export type ScorePeriod = {
+  band: "legacy" | "conformal";
+  interval_method: string;
+  first_base_date: string | null;
+  last_base_date: string | null;
+  n_resolved: number;
+  n_pending: number;
+  band_methods: string[];
+  n_fallback?: number;
+  n_dates?: number;
+  n_independent?: number;
+  interval_coverage?: number;
+  interval_coverage_ci_90?: [number, number];
+  interval_mean_width_pct?: number;
+  hit_rate?: number;
+  up_rate?: number;
+  skill_vs_naive?: number;
 };
 export type PredictionLog = Freshness & {
   items: LogRow[];
@@ -253,8 +278,13 @@ export type PredictionLog = Freshness & {
   offset: number;
   scorecard: Scorecard;
   chain_ok: boolean;
+  /** Why the entry chain failed (null when intact; absent from older API versions). */
+  chain_error?: { reason: string; row_id: number | null } | null;
   outcomes_ok?: boolean;
   unsealed_resolved?: number;
+  /** Dated switch of the logged band (absent from older API versions). */
+  band_cutover?: { configured_from: string; first_conformal_base_date: string | null };
+  hash_versions?: { v1: number; v2: number; first_v2_id: number | null; v1_after_v2: number };
   symbols: string[];
   horizon_days: number;
   /** Sessions with no predictions, listed openly; never back-filled. Optional: older APIs don't send it. */
