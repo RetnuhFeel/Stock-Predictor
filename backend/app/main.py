@@ -453,6 +453,14 @@ def _verdict(bt: dict) -> str:
     return "not_better"
 
 
+def report_method(rows: list[dict], horizon: int) -> str:
+    """The report's method line, with the fold count the backtests really used (not a hard-coded number)."""
+    folds = sorted({r["n_folds"] for r in rows if r.get("n_folds")})
+    n = "/".join(str(f) for f in folds) if folds else "several"
+    return (f"Expanding-window walk-forward, {n} folds, {horizon}-day embargo, vs. a 'price stays flat' baseline "
+            "(drift, i.e. 'average past return', shown for context).")
+
+
 _report_lock = threading.Lock()  # one report build at a time: bounds CPU even under a burst of requests
 
 
@@ -484,6 +492,8 @@ def model_report(provider: BaseProvider = Depends(get_provider)):
                 "symbol": sym, "verdict": _verdict(bt), "skill_vs_baseline": bt["skill_vs_baseline"],
                 "skill_ci_90": bt["skill_ci_90"], "model_rmse": bt["model"]["rmse"],
                 "baseline_rmse": bt["naive_baseline"]["rmse"], "hit_rate": bt["model"]["directional_accuracy"],
+                "drift_rmse": bt["drift_baseline"]["rmse"], "skill_vs_drift": bt["skill_vs_drift"],
+                "n_folds": bt["n_folds"],
                 "up_rate": bt["up_rate"], "n_test_points": bt["n_test_points"],
                 "n_independent_tests": bt["n_independent_tests"], "small_sample": bt["small_sample"],
                 "range_tested": bool(result["conformal"]["used"]),
@@ -500,8 +510,7 @@ def model_report(provider: BaseProvider = Depends(get_provider)):
                           stale_max_age=config.STALE_MAX_AGE_S)
     v = got.value
     return {"horizon_days": horizon, "rows": v["rows"], "failed": v["failed"],
-            "method": (f"Expanding-window walk-forward, 6 folds, {horizon}-day embargo, "
-                       "vs. a 'price stays flat' baseline."),
+            "method": report_method(v["rows"], horizon),
             "summary": {"better": sum(r["verdict"] == "better" for r in v["rows"]),
                         "inconclusive": sum(r["verdict"] == "inconclusive" for r in v["rows"]),
                         "not_better": sum(r["verdict"] == "not_better" for r in v["rows"]),

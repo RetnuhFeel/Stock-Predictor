@@ -241,6 +241,10 @@ export type Scorecard = {
   up_rate?: number;
   interval_coverage?: number;
   interval_nominal?: number;
+  /** 90% plausible range for the coverage, based on independent periods (absent from older API versions). */
+  interval_coverage_ci_90?: [number, number];
+  /** Which band was logged (the pre-conformal band, not the forecast page's conformal range). */
+  interval_method?: string;
 };
 export type PredictionLog = Freshness & {
   items: LogRow[];

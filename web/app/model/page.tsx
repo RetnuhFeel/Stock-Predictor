@@ -24,7 +24,7 @@ export default function Model() {
       </p>
       <h2>How we test it, honestly</h2>
       <ul>
-        <li><strong>Walk-forward:</strong> the model is trained only on the past and tested on the period right after, repeatedly (6 folds). It never sees the future.</li>
+        <li><strong>Walk-forward:</strong> the model is trained only on the past and tested on the period right after, repeatedly (six blocks over the second half of the history, plus a short leftover block when the days do not divide evenly). It never sees the future.</li>
         <li><strong>Embargo:</strong> a gap of at least <em>N</em> days between training and test data, because an <em>N</em>-day label overlaps the following days.</li>
         <li><strong>Baseline:</strong> every result is compared with &ldquo;the price stays where it is&rdquo;. If the model can&apos;t beat that, it has no skill.</li>
         <li><strong>Uncertainty:</strong> overlapping windows make tests correlated, so a block bootstrap gives a 90% range for the skill score, and we only say &ldquo;better&rdquo; when that whole range is above zero.</li>

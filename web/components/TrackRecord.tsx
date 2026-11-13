@@ -77,9 +77,14 @@ export function TrackRecord() {
                     <tr className="border-b border-slate-200 dark:border-slate-800"><th scope="row" className="py-1 pr-2 font-medium">Resolved / waiting</th><td>{sc.n_resolved} / {sc.n_pending} ({sc.n_dates} forecast dates, about {sc.n_independent} independent)</td></tr>
                     <tr className="border-b border-slate-200 dark:border-slate-800"><th scope="row" className="py-1 pr-2 font-medium">Skill vs. &ldquo;flat&rdquo;</th><td>{pct(sc.skill_vs_naive ?? 0)}{sc.skill_ci_90 ? ` (90% range ${pct(sc.skill_ci_90[0])} to ${pct(sc.skill_ci_90[1])})` : " (no range yet: too few periods)"}</td></tr>
                     <tr className="border-b border-slate-200 dark:border-slate-800"><th scope="row" className="py-1 pr-2 font-medium">Right direction</th><td>{pct(sc.hit_rate ?? 0, 0).replace("+", "")} (prices rose in {pct(sc.up_rate ?? 0, 0).replace("+", "")} of cases)</td></tr>
-                    <tr><th scope="row" className="py-1 pr-2 font-medium">80% range contained the result</th><td>{pct(sc.interval_coverage ?? 0, 0).replace("+", "")} (target {pct(sc.interval_nominal ?? 0.8, 0).replace("+", "")})</td></tr>
+                    <tr><th scope="row" className="py-1 pr-2 font-medium">80% range contained the result</th><td>{pct(sc.interval_coverage ?? 0, 0).replace("+", "")} (target {pct(sc.interval_nominal ?? 0.8, 0).replace("+", "")}{sc.interval_coverage_ci_90 ? `; plausible range ${pct(sc.interval_coverage_ci_90[0], 0).replace("+", "")} to ${pct(sc.interval_coverage_ci_90[1], 0).replace("+", "")}` : ""})</td></tr>
                   </tbody>
                 </table>
+                <p className="text-xs">
+                  The logged 80% range is the band the log started with (the 10th to 90th percentile of past walk-forward errors around the forecast), not the
+                  conformal range the forecast page shows today. It is kept so the record measures one method from start to finish. Direction and range
+                  results count every ticker, but same-day tickers move together, so the plausible range uses independent periods, not rows.
+                </p>
               </>
             )}
           </section>

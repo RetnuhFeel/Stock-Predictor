@@ -10,6 +10,7 @@ import logging
 import numpy as np
 import pandas as pd
 
+from .conformal import wilson_interval
 from .forecast import MIN_INDEPENDENT_TESTS, ratio, skill_ci_sq
 from .freshness import bar_is_final
 from .observability import log_event
@@ -43,6 +44,12 @@ MISSED_SESSIONS: tuple[dict, ...] = (
         "backfilled": False,
     },
 )
+
+
+# What the logged 80% range is. It is the pre-conformal band (see record_from_forecast), NOT the conformal range that
+# the forecast page shows today, so the scorecard's coverage describes that older band.
+INTERVAL_METHOD = ("legacy band: 10th-90th percentile of walk-forward errors around the point forecast "
+                   "(the band the log started with; not the conformal range shown on the forecast page)")
 
 
 def missed_sessions(symbols: list[str]) -> list[dict]:
@@ -123,7 +130,11 @@ def scorecard(rows: list[dict], horizon: int | None = None) -> dict:
            "skill_vs_naive": skill, "model_rmse": float(np.sqrt(np.mean((real - pred) ** 2))),
            "naive_rmse": float(np.sqrt(np.mean(real**2))),
            "hit_rate": float(np.mean(np.sign(pred) == np.sign(real))), "up_rate": float(np.mean(real > 0)),
-           "interval_coverage": float(cover), "interval_nominal": 0.8}
+           "interval_coverage": float(cover), "interval_nominal": 0.8,
+           # Plausible range for the coverage, using independent periods (not rows: same-day tickers and overlapping
+           # windows are correlated), so a handful of results cannot look like a precise number.
+           "interval_coverage_ci_90": list(wilson_interval(float(cover), float(n_indep))),
+           "interval_method": INTERVAL_METHOD}
     if n_indep < MIN_INDEPENDENT_TESTS:
         out.update(verdict="too_early", skill_ci_90=None)
         return out
