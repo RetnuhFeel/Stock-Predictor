@@ -42,6 +42,8 @@ jobs:
       - run: pip install -c backend/requirements.lock -r analysis/requirements.txt
       - run: python analysis/run_analysis.py --synthetic --quick --out "$RUNNER_TEMP/analysis-smoke"
       - run: test "$(ls "$RUNNER_TEMP"/analysis-smoke/figures/*.png | wc -l)" -eq 5
+      - run: python analysis/run_robustness.py --synthetic --quick --out "$RUNNER_TEMP/analysis-smoke"
+      - run: test -s "$RUNNER_TEMP/analysis-smoke/results/robustness_tables.md"
       - run: python analysis/build_findings.py --check
 
   web:

@@ -203,11 +203,33 @@ def origin_row(test: slice, n_rows: int, offset: int) -> int:
     return range(*test.indices(n_rows))[offset]
 
 
+def known_residuals(wf, test_rows: np.ndarray, n_earlier: int, origin: int, horizon: int) -> np.ndarray:
+    """Out-of-sample residuals from earlier folds whose outcome was already known at ``origin``.
+
+    A test point at row r has the label "return from r to r + horizon", so its error is known only from row
+    r + horizon on. The last ``horizon - 1`` points of the previous fold are therefore NOT yet known at the first
+    origins of the next fold, and using them would be look-ahead (an earlier version did exactly that)."""
+    idx = np.arange(n_earlier)
+    idx = idx[test_rows[idx] + horizon <= origin]
+    return wf.y_true[idx] - wf.y_pred[idx]
+
+
+def band_quantiles(wf, test_rows: np.ndarray, n_earlier: int, origin: int,
+                   horizon: int) -> tuple[float, float] | None:
+    """10th/90th percentile of the known residuals: the standard 80% band as it could have been built at ``origin``
+    (None if no earlier error was known yet)."""
+    resid = known_residuals(wf, test_rows, n_earlier, origin, horizon)
+    if len(resid) == 0:
+        return None
+    return float(np.quantile(resid, 0.10)), float(np.quantile(resid, 0.90))
+
+
 def backtest(close: pd.Series, horizon: int) -> dict:
     """Expanding-window walk-forward (same folds and embargo as the standard forecast).
 
     At each evaluation origin (spaced >= horizon days apart) everything is computed from data up to that date:
-    the standard model's point + band (band quantiles from *earlier* folds' out-of-sample errors only) and a jump
+    the standard model's point + band (band quantiles from earlier folds' out-of-sample errors whose outcome was already
+    known at that origin, i.e. with an h-day embargo) and a jump
     calibration from returns up to that date. Compares, for the h-day return:
       baseline  the standard 80% interval
       jump      the 10-90% range of the simulated jump-diffusion, NOT clamped
@@ -229,14 +251,17 @@ def backtest(close: pd.Series, horizon: int) -> dict:
     n_total = int(bounds[-1])  # number of out-of-sample points across all folds
     stride = max(horizon, int(np.ceil(max(n_total, 1) / MAX_BT_ORIGINS)))
     rows = {k: [] for k in ("y", "pred", "blo", "bhi", "jlo", "jhi", "slo", "shi", "smed", "smean", "clamp")}
+    test_rows = np.concatenate([np.arange(*t.indices(len(X))) for _, t in folds])  # train_df row of each test point
     for k in range(1, len(folds)):
-        resid = wf.y_true[: bounds[k]] - wf.y_pred[: bounds[k]]  # earlier folds only
-        q10, q90 = (float(np.quantile(resid, 0.10)), float(np.quantile(resid, 0.90)))
         for j in range(int(bounds[k]), int(bounds[k + 1]), stride):
             pred, truth = float(wf.y_pred[j]), float(wf.y_true[j])
             # j indexes the CONCATENATED test blocks; map it to the real row of ``train_df`` (the origin day) so
             # calibration sees data up to that day and no later (and no less).
             row_i = origin_row(folds[k][1], len(X), j - int(bounds[k]))
+            band = band_quantiles(wf, test_rows, int(bounds[k]), row_i, horizon)
+            if band is None:
+                continue
+            q10, q90 = band
             hist = logret.loc[: dates[row_i]].to_numpy()
             if len(hist) < MIN_CAL_DAYS:
                 continue
@@ -269,7 +294,7 @@ def backtest(close: pd.Series, horizon: int) -> dict:
         "embargo_days": horizon,
         "method": (
             f"expanding-window walk-forward, {len(folds)} folds, {horizon}-day embargo; baseline band quantiles "
-            f"from earlier folds only; jump calibration from data up to each origin; "
+            f"from earlier folds' errors already known at each origin; jump calibration from data up to each origin; "
             f"{n} origins spaced >= {stride} trading days apart"
         ),
     }

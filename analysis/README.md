@@ -7,6 +7,7 @@ cannot say anything the code does not.
 | File | What it is |
 |---|---|
 | `run_analysis.py` | Downloads prices (cached in `analysis/.cache/`, git-ignored), runs every experiment, writes `results/` and `figures/` |
+| `run_robustness.py` | Section 4.4 of the write-up: the ETF-only subset (filtered from the committed main results) and a fresh 2015-2021 run (includes the 2020 crash). Writes `results/robustness_*`; never touches the main results |
 | `build_findings.py` + `findings_template.md` | Fill the prose and tables of `docs/FINDINGS.md` from `results/`, so numbers are never typed by hand |
 | `findings.ipynb` | A short, executed notebook that loads the saved results and lets you explore them (per-ticker tables, charts) |
 | `results/` | `tables.md`, `summary.json` (data window, tickers, bar counts, commit) and one CSV per experiment |
@@ -18,6 +19,7 @@ cannot say anything the code does not.
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -c backend/requirements.lock -r analysis/requirements.txt
 python analysis/run_analysis.py          # ~3 minutes, needs internet (yfinance); pinned end date 2026-10-01
+python analysis/run_robustness.py        # ~1 minute, needs internet; pinned 2015-01-02 to 2021-12-31
 python analysis/build_findings.py        # rewrite docs/FINDINGS.md from the new results
 ```
 
@@ -37,5 +39,6 @@ python analysis/build_findings.py        # rewrite docs/FINDINGS.md from the new
    replayed on the same origins, at 5, 20, 60, 120, 180 and 256 days.
 4. **Leakage demo**: one model scored with shuffled k-fold, walk-forward without an embargo, and walk-forward with the embargo.
 5. **SPY case study**: out-of-sample 20-day volatility forecasts versus what happened.
+6. **Robustness** (`run_robustness.py`): the point, volatility and 5/20-day interval checks on the 5 ETFs alone and on 2015-2021.
 
 Not a trading system, not financial advice.

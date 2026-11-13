@@ -157,6 +157,62 @@ Share of past outcomes that landed inside the claimed 80% range, replayed on the
 - Individual tickers vary a lot (for example 72% to 89% at 20 days, and wider still at longer horizons, where only 9 to 16 independent periods stand behind each number). A median near 80% does not mean every ticker's range is calibrated.
 - **At 60 and 256 days the app does not use conformal** (about 6 and 5 independent periods). The coverage shown in the chart for those horizons is a rough diagnostic only and should not be read as validation.
 
+### 4.4 Robustness: funds only, and another period with a crash in it
+
+Two checks on whether the results above are an artefact of the stock list or of 2021 to 2026. The existing tables above are unchanged; these come from [`analysis/run_robustness.py`](../analysis/run_robustness.py).
+
+- **ETFs only** (SPY, QQQ, XLE, TLT, GLD): funds have no single-company survivorship. This is the main window's committed results filtered to those 5 tickers, not a new run.
+- **2015 to 2021** (2015-01-02 to 2021-12-31, the same 20 tickers, about 1,763 trading days each): the walk-forward test half runs from mid-2018 to 2021, so it includes the late-2018 sell-off and the **2020 COVID crash**. It is a fresh run with the same code. It still uses today's tickers, so it tests another market period, not survivorship.
+
+| sample | horizon (days) | tickers | gradient boosting, median skill | gradient boosting better than flat | drift, median skill | any model better than flat | direction right (median) vs "always up" |
+|---|---|---|---|---|---|---|---|
+| main, all 20 | 5 | 20 | -4.2% | 0/20 | +0.2% | 0/80 | 51% vs 55% |
+| main, all 20 | 20 | 20 | -8.6% | 0/20 | +0.7% | 2/80 | 52% vs 60% |
+| main, all 20 | 60 | 20 | -8.4% | 0/20 | +3.8% | 6/80 | 58% vs 65% |
+| main, ETFs only | 5 | 5 | -5.0% | 0/5 | +0.8% | 0/20 | 53% vs 59% |
+| main, ETFs only | 20 | 5 | -6.9% | 0/5 | +3.3% | 2/20 | 56% vs 66% |
+| main, ETFs only | 60 | 5 | -3.6% | 0/5 | +8.1% | 2/20 | 61% vs 75% |
+| 2015-2021, all 20 | 5 | 20 | -3.1% | 0/20 | +0.3% | 1/80 | 52% vs 58% |
+| 2015-2021, all 20 | 20 | 20 | -3.4% | 0/20 | +1.3% | 6/80 | 55% vs 62% |
+| 2015-2021, all 20 | 60 | 20 | +0.1% | 2/20 | +3.7% | 14/80 | 63% vs 71% |
+| 2015-2021, ETFs only | 5 | 5 | -3.2% | 0/5 | +0.2% | 0/20 | 52% vs 59% |
+| 2015-2021, ETFs only | 20 | 5 | -5.8% | 0/5 | +0.9% | 2/20 | 53% vs 56% |
+| 2015-2021, ETFs only | 60 | 5 | +2.9% | 0/5 | +1.2% | 4/20 | 60% vs 64% |
+
+- **The main model still does not beat "flat"** in the other period at 5 and 20 days (median skill -3.1% / -3.4%). At 60 days it is about even (median +0.1%) and clears the bar on 2 of 20 tickers.
+- **More "wins" in 2015 to 2021:** 21 of 240 model-ticker-horizon tests were rated "better", against about 12 expected from luck. 11 of them are drift and 8 ridge regression, mostly at 60 days and mostly on the big tech winners (MSFT, GOOGL, QQQ, AAPL). That fits "the trend continued, and these are survivors" better than real skill. At 60 days the period holds only about 13 independent windows per ticker.
+- **Direction is still worse than "always up"** in every sample and horizon (63% vs 71% at 60 days in 2015 to 2021).
+
+| sample | horizon (days) | EWMA, median skill vs recent vol | GJR-GARCH, median change vs EWMA | GARCH clearly better / worse than EWMA |
+|---|---|---|---|---|
+| main, all 20 | 5 | +1.4% | +3.0% | 7 / 6 of 20 |
+| main, all 20 | 20 | +6.5% | +10.1% | 8 / 4 of 20 |
+| main, all 20 | 60 | +10.1% | +20.2% | 12 / 5 of 20 |
+| main, ETFs only | 5 | -0.0% | +3.6% | 2 / 2 of 5 |
+| main, ETFs only | 20 | +0.7% | +5.9% | 1 / 1 of 5 |
+| main, ETFs only | 60 | +2.3% | +6.2% | 2 / 2 of 5 |
+| 2015-2021, all 20 | 5 | +0.4% | +4.7% | 13 / 3 of 20 |
+| 2015-2021, all 20 | 20 | +4.5% | +10.2% | 10 / 1 of 20 |
+| 2015-2021, all 20 | 60 | +5.7% | +17.8% | 14 / 1 of 20 |
+| 2015-2021, ETFs only | 5 | -0.7% | +5.1% | 4 / 1 of 5 |
+| 2015-2021, ETFs only | 20 | +3.3% | +11.5% | 4 / 0 of 5 |
+| 2015-2021, ETFs only | 60 | +3.9% | +19.8% | 4 / 0 of 5 |
+
+- **Volatility is still the forecastable part.** In 2015 to 2021, GJR-GARCH was clearly better than EWMA on 10 and 14 of 20 tickers at 20 and 60 days, and clearly worse on only 1 and 1: a cleaner win than in the main window. On the 5 ETFs in the main window the picture is mixed (small samples).
+
+| sample | horizon (days) | range used | conformal coverage, median (min-max) | normal band coverage, median (min-max) | independent test periods (median) |
+|---|---|---|---|---|---|
+| main, all 20 | 5 | 20/20 | 81% (77-84%) | 79% (73-82%) | 99 |
+| main, all 20 | 20 | 20/20 | 81% (72-89%) | 78% (61-85%) | 23 |
+| main, ETFs only | 5 | 5/5 | 81% (79-84%) | 79% (78-80%) | 99 |
+| main, ETFs only | 20 | 5/5 | 80% (74-89%) | 81% (73-85%) | 23 |
+| 2015-2021, all 20 | 5 | 20/20 | 81% (78-84%) | 81% (77-85%) | 150 |
+| 2015-2021, all 20 | 20 | 20/20 | 80% (71-87%) | 78% (69-88%) | 36 |
+| 2015-2021, ETFs only | 5 | 5/5 | 81% (79-82%) | 80% (79-84%) | 150 |
+| 2015-2021, ETFs only | 20 | 5/5 | 82% (80-86%) | 75% (74-79%) | 36 |
+
+- **The conformal 80% range held up:** 81% / 80% median coverage at 5 / 20 days in 2015 to 2021, crash included (target 80%), against 81% / 78% for the textbook band. Per-ticker spread is still wide at 20 days.
+
 ## 5. What did not work, or is inconclusive
 
 - **Return prediction.** None of the point models, including the machine-learning model, beat "flat" in a way distinguishable from luck. The README already reports this for 5 tickers; the larger 20-ticker test here agrees.
@@ -164,12 +220,12 @@ Share of past outcomes that landed inside the claimed 80% range, replayed on the
 - **GARCH over EWMA at 5 days:** no clear difference. **At 120 days:** inconclusive by construction (too few independent periods).
 - **Conformal at 60 and 256 days:** cannot be validated with five years of data, so it is switched off there, and 180 days has a median coverage of 78% (a few tickers well below 80%).
 - **The experimental "spike scenario"** (a jump-diffusion overlay on the forecast range) was tested separately on 5 tickers and 2 horizons; its typical path was never clearly more accurate than the standard forecast (all 10 comparisons inconclusive). The details are in [`docs/REFERENCE.md`](REFERENCE.md) and were *not* regenerated for this page.
-- **A bug I found by testing:** an earlier version of that spike backtest calibrated each origin on data from an earlier date than the one being forecast (an index mix-up), which flattered its results. It was caught, fixed and the table was replaced (also documented in the reference). Reproducible evaluation code is what makes a mistake like this findable.
+- **A bug I found by testing:** an earlier version of that spike backtest calibrated each origin on data from an earlier date than the one being forecast (an index mix-up), which flattered its results. It was caught, fixed and the table was replaced (also documented in the reference). Reproducible evaluation code is what makes a mistake like this findable. A second, smaller look-ahead in the same backtest was found in a November 2026 review: the standard band it is compared against used a few past errors whose outcomes were not yet known at the forecast date. That is now **fixed** (with a regression test) and the table re-run. No coverage figure or verdict changed, and the spike ranges' measured gains grew slightly.
 
 ## 6. Honest limitations
 
-- **One market regime.** 2021-10 to 2026-10, mostly rising, with the April 2025 shock the main stress episode. Results may not hold in other regimes.
-- **Survivorship and selection.** 20 large, liquid names that exist today. No delisted companies, no small caps, no non-US markets.
+- **Few market regimes.** The main window is 2021-10 to 2026-10, mostly rising, with the April 2025 shock as the main stress episode. Section 4.4 repeats the tests on 2015 to 2021 (including the 2020 crash), and the conclusions mostly hold, but that is two overlapping bull-market eras, not 2008 or a long bear market.
+- **Survivorship and selection.** 20 large, liquid names that exist today. No delisted companies, no small caps, no non-US markets. The ETF-only view in section 4.4 removes single-company survivorship but leaves only 5 tickers.
 - **Small effective samples.** Overlapping windows mean 60-day results rest on about 9 independent periods and 120-day results on about 4. Medians over 20 tickers are not 20 independent experiments either: the tickers move together.
 - **Multiple comparisons.** 4 point models × 3 horizons × 20 tickers = 240 tests; some "wins" are expected by chance, and I report the count rather than the best cases.
 - **Data quality.** Yahoo Finance is unofficial, adjusted prices can be revised, and a re-run on a different date can differ slightly. The committed results record the exact window used.
@@ -180,7 +236,7 @@ Share of past outcomes that landed inside the claimed 80% range, replayed on the
 
 1. Let the live log accumulate and evaluate it as described below (the real test).
 2. Compare HAR with EWMA as the volatility headline *on the live log*, since the table above is only a hint.
-3. Add more regimes and markets (2008, 2020, non-US, small caps) and include delisted names.
+3. Add more regimes and markets (2008, non-US, small caps) and include delisted names (2020 is now covered in section 4.4).
 4. Evaluate pretrained time-series models (Chronos, TimesFM) offline with the same walk-forward harness, and only add one if it beats the baselines.
 5. Move the prediction log to the conformal interval, as a deliberate versioned change so its history stays comparable.
 6. Add a cost-aware backtest if a trading question is ever asked (it is not today).
