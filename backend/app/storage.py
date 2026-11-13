@@ -81,6 +81,10 @@ predictions = Table(
     Column("res_seq", Integer),
     Column("res_prev_hash", String(64)),
     Column("res_hash", String(64)),
+    # hash rule v2 (rows written from Nov 2026 on); NULL on every earlier row, which keeps the v1 rule untouched
+    Column("hash_version", Integer),                      # NULL or 1 = v1 rule, 2 = v2 rule
+    Column("model_version", String(64)),                  # model id + code commit that made the prediction
+    Column("band_method", String(32)),                    # which 80% band was logged (see trackrecord.BAND_*)
     UniqueConstraint("symbol", "horizon_days", "base_date", name="uq_prediction"),
     Index("uq_predictions_prev_hash", "prev_hash", unique=True),   # a second row can never extend the same parent
     Index("uq_predictions_res_seq", "res_seq", unique=True),       # nor can two outcomes take the same position
@@ -88,8 +92,15 @@ predictions = Table(
 
 HASH_FIELDS = ("symbol", "horizon_days", "made_at", "base_date", "base_close", "predicted_return",
                "interval_low", "interval_high", "backtest_skill", "backtest_verdict", "model")
+# v2 adds what made the prediction and which band was logged. The payload also starts with the literal tag "v2", so a
+# v2 row cannot be passed off as v1 (or the reverse) by editing ``hash_version``: the recomputed hash would differ.
+HASH_FIELDS_V2 = HASH_FIELDS + ("model_version", "band_method")
+HASH_VERSION_CURRENT = 2
+V2_ONLY_FIELDS = ("model_version", "band_method")
 RES_FIELDS = ("status", "resolved_at", "realized_date", "realized_close", "realized_return")
-NEW_COLUMNS = {"res_seq": "INTEGER", "res_prev_hash": "VARCHAR(64)", "res_hash": "VARCHAR(64)"}
+# Columns added to an existing table at startup (nullable, no default, no rewrite). Order matters only for the log.
+NEW_COLUMNS = {"res_seq": "INTEGER", "res_prev_hash": "VARCHAR(64)", "res_hash": "VARCHAR(64)",
+               "hash_version": "INTEGER", "model_version": "VARCHAR(64)", "band_method": "VARCHAR(32)"}
 GENESIS = "0" * 64
 # Postgres advisory-lock keys: one per chain, so appends/resolutions are serialised across app instances
 LOCK_ENTRY_CHAIN = 7_351_001
@@ -117,9 +128,32 @@ class StorageUnavailable(ApiError):
         super().__init__(message, retryable=True, retry_after=30)
 
 
+class UnknownHashVersion(ValueError):
+    """A row claims a hash rule this code does not know: it can never verify."""
+
+
 def compute_hash(prev_hash: str, row: dict) -> str:
-    payload = json.dumps([row[k] for k in HASH_FIELDS], separators=(",", ":"), default=str)
+    """Entry hash of a row under the rule its ``hash_version`` names.
+
+    v1 (``hash_version`` NULL/absent or 1; every row written before Nov 2026) is byte-for-byte the original rule:
+        sha256(prev_hash + json.dumps([row[f] for f in HASH_FIELDS], separators=(",", ":"), default=str))
+    v2 (``hash_version`` 2) prepends the tag and adds the v2 fields:
+        sha256(prev_hash + json.dumps(["v2"] + [row[f] for f in HASH_FIELDS_V2], separators=(",", ":"), default=str))
+    Both rules chain through ``prev_hash`` the same way, so a v2 row simply extends a v1 chain."""
+    version = row.get("hash_version")
+    if version is None or version == 1:
+        payload = json.dumps([row[k] for k in HASH_FIELDS], separators=(",", ":"), default=str)
+    elif version == 2:
+        payload = json.dumps(["v2"] + [row[k] for k in HASH_FIELDS_V2], separators=(",", ":"), default=str)
+    else:
+        raise UnknownHashVersion(f"unknown hash_version {version!r}")
     return hashlib.sha256((prev_hash + payload).encode()).hexdigest()
+
+
+def _v1_with_v2_fields(row: dict) -> bool:
+    """A v1 row's hash does not cover the v2-only fields, so a v1 row that carries any of them was edited after it
+    was written (e.g. a band_method planted to move an old row into the conformal period). It fails verification."""
+    return (row.get("hash_version") or 1) == 1 and any(row.get(k) is not None for k in V2_ONLY_FIELDS)
 
 
 def compute_res_hash(res_prev: str, entry_hash: str, row: dict) -> str:
@@ -384,7 +418,12 @@ class PredictionStore:
         rows = self.all_rows() if rows is None else rows
         chain_ok, prev = True, GENESIS
         for r in rows:
-            if r["prev_hash"] != prev or r["entry_hash"] != compute_hash(prev, r):
+            try:
+                ok = (r["prev_hash"] == prev and r["entry_hash"] == compute_hash(prev, r)
+                      and not _v1_with_v2_fields(r))
+            except UnknownHashVersion:
+                ok = False
+            if not ok:
                 chain_ok = False
                 break
             prev = r["entry_hash"]
@@ -404,6 +443,16 @@ class PredictionStore:
             res_prev = r["res_hash"]
         return {"chain_ok": chain_ok, "outcomes_ok": outcomes_ok, "unsealed_resolved": unsealed,
                 "sealed_resolved": len(sealed)}
+
+    @staticmethod
+    def hash_versions(rows: list[dict]) -> dict:
+        """Informational: how many rows use each hash rule and where the log switched. A v1 row after the first v2
+        row still verifies (e.g. an older instance writing during a deploy), but it is counted so it is visible."""
+        versions = [r.get("hash_version") or 1 for r in rows]
+        first_v2 = next((r["id"] for r, v in zip(rows, versions, strict=True) if v == 2), None)
+        return {"v1": versions.count(1), "v2": versions.count(2), "first_v2_id": first_v2,
+                "v1_after_v2": sum(1 for r, v in zip(rows, versions, strict=True)
+                                   if v == 1 and first_v2 is not None and r["id"] > first_v2)}
 
     def verify_chain(self) -> bool:
         """Entry chain only (kept for compatibility); see ``verify_report`` for outcomes."""

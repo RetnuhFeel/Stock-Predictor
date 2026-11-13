@@ -24,8 +24,11 @@ const emptyLog = { items: [], total: 0, limit: 25, offset: 0, scorecard: sc0, ch
 const logRow = (id, status) => ({ id, symbol: id % 2 ? "SPY" : "AAPL", horizon_days: 5, made_at: `2026-09-${10 + id}T22:30:00Z`, base_date: `2026-09-${10 + id}`, base_close: 100, predicted_return: 0.004, interval_low: 95, interval_high: 106,
   backtest_skill: -0.03, model: "gbm", status, resolved_at: status === "resolved" ? "2026-09-30T22:30:00Z" : null, realized_date: status === "resolved" ? "2026-09-30" : null, realized_close: status === "resolved" ? 101 : null,
   realized_return: status === "resolved" ? 0.01 : null, entry_hash: "ab".repeat(32), ...(status === "resolved" ? { in_interval: true, direction_correct: true } : {}) });
-const fullLog = { ...emptyLog, items: [logRow(2, "resolved"), logRow(1, "pending")], total: 2, scorecard: { ...sc0, verdict: "too_early", n_resolved: 1, n_pending: 1, n_dates: 1, n_independent: 1, horizon_days: 5, skill_vs_naive: -0.02, skill_ci_90: null,
-  hit_rate: 1, up_rate: 1, interval_coverage: 1, interval_nominal: 0.8, interval_coverage_ci_90: [0.21, 1] },
+const fullLog = { ...emptyLog, items: [logRow(2, "resolved"), { ...logRow(1, "pending"), hash_version: 2, model_version: "gbm-v1@abc1234", band_method: "split_conformal" }], total: 2, scorecard: { ...sc0, verdict: "too_early", n_resolved: 1, n_pending: 1, n_dates: 1, n_independent: 1, horizon_days: 5, skill_vs_naive: -0.02, skill_ci_90: null,
+  hit_rate: 1, up_rate: 1, interval_coverage: 1, interval_nominal: 0.8, interval_coverage_ci_90: [0.21, 1],
+  periods: [{ band: "legacy", interval_method: "legacy band", first_base_date: "2026-09-12", last_base_date: "2026-09-12", n_resolved: 1, n_pending: 0, band_methods: ["legacy (v1 row)"], n_dates: 1, n_independent: 1, interval_coverage: 1, interval_coverage_ci_90: [0.21, 1], interval_mean_width_pct: 11 },
+    { band: "conformal", interval_method: "conformal", first_base_date: "2026-09-11", last_base_date: "2026-09-11", n_resolved: 0, n_pending: 1, band_methods: ["split_conformal"], n_fallback: 0 }] },
+  band_cutover: { configured_from: "2026-09-11", first_conformal_base_date: "2026-09-11" },
   missed_sessions: [{ base_date: "2026-10-15", symbols: ["SPY"], cause: "upstream_data_not_updated", note: "No SPY prediction was recorded for this close.", backfilled: false }, { base_date: "2026-10-02", symbols: ["SPY", "AAPL"], cause: "upstream_data_not_updated", note: "No predictions were recorded for this close.", backfilled: false }] };
 
 async function mockApi(context) {
@@ -290,6 +293,10 @@ for (const scheme of ["light", "dark"]) {
   ok((await page.locator("section[aria-labelledby=missed] li").first().innerText()).includes("(SPY only)"), `[${scheme}] partial missed day names its ticker`);
   ok(await page.getByText(/Waiting \(resolves after 5 trading days\)/).isVisible(), `[${scheme}] pending prediction shown as waiting`);
   ok(await page.getByText(/Live results only/).isVisible(), `[${scheme}] live vs backtest distinction stated`);
+  ok(await page.getByText(/Which 80% range is logged/).isVisible(), `[${scheme}] band cutover explained`);
+  ok(await page.getByText(/Earlier rows were not changed or re-scored/).isVisible(), `[${scheme}] cutover says old rows are untouched`);
+  ok((await page.locator("section[aria-labelledby=scorecard] table").nth(1).locator("tbody tr").count()) === 2, `[${scheme}] coverage reported per period`);
+  ok((await page.locator("section[aria-labelledby=log] tbody tr").first().innerText()).includes("legacy band"), `[${scheme}] row shows the band it logged`);
   await axe(page, `[${scheme}] /track-record (populated)`);
   for (const path of ["/terms", "/privacy"]) { await page.goto(`${WEB}${path}`); await axe(page, `[${scheme}] ${path}`); }
   ok(errors.length === 0, `[${scheme}] no uncaught page errors ${errors.join("; ")}`);

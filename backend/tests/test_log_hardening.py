@@ -275,7 +275,7 @@ def test_migration_statements_are_additive_and_idempotent_on_postgres(monkeypatc
     joined = "\n".join(sql)
     forbidden = ("UPDATE ", "DELETE ", "DROP ", "TRUNCATE", " NOT NULL,", "DEFAULT", "ALTER COLUMN", "REINDEX")
     assert not any(w in joined.upper() for w in forbidden)  # additive only: no row or column is rewritten
-    assert joined.count("ADD COLUMN IF NOT EXISTS") == 3
+    assert joined.count("ADD COLUMN IF NOT EXISTS") == len(NEW_COLUMNS) == 6
     assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_predictions_prev_hash" in joined
     assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_predictions_res_seq" in joined
     assert sql[0].startswith("SET LOCAL lock_timeout") and "pg_advisory_xact_lock" in sql[1]

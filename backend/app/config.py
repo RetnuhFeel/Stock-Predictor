@@ -100,6 +100,17 @@ TRENDING_MAX_LIMIT = 10
 # about any visitor is recorded.
 LOG_SYMBOLS = ["SPY", "AAPL", "MSFT", "NVDA", "TSLA"]
 LOG_HORIZON = 5
+# Cutover of the logged 80% band (see docs/REFERENCE.md, "Band cutover"). Rows whose base date is on or after this
+# trading day store the forecast's own 80% range (split conformal when its check passes); earlier base dates keep the
+# legacy band the log started with. Applies to NEW rows only: nothing already logged is touched. Every row records
+# which band it logged (``band_method``), and the scorecard groups rows by that, so the per-row field is the source of
+# truth. If the code is deployed after this date, the first conformal row is simply the first session logged after
+# the deploy (older sessions are never logged late).
+LOG_CONFORMAL_FROM = os.getenv("LOG_CONFORMAL_FROM", "2026-11-16")
+# Identifies the model that made a logged prediction. Bump MODEL_ID by hand whenever the features, model, training
+# window or band recipe change; the code commit is added automatically on Render (RENDER_GIT_COMMIT) or via GIT_COMMIT.
+MODEL_ID = "gbm-v1"
+CODE_COMMIT = (os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or "").strip()[:12]
 # Protects POST /api/_tasks/run-prediction-log. Unset/empty = endpoint disabled (404).
 LOG_TASK_TOKEN = _token("LOG_TASK_TOKEN")
 # SQLite file by default; set DATABASE_URL (e.g. a Postgres URL) for storage that survives redeploys.

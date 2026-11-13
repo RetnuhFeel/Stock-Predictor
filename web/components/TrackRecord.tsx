@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { useApi } from "@/lib/api";
-import type { LogRow, PredictionLog } from "@/lib/types";
+import type { LogRow, PredictionLog, ScorePeriod } from "@/lib/types";
 import { ErrorNotice, OutdatedLabel } from "./Notices";
 
 const PAGE = 25;
@@ -19,6 +19,34 @@ function Outcome({ r }: { r: LogRow }) {
       <span className={r.direction_correct ? "text-green-900 dark:text-green-300" : "text-red-900 dark:text-red-300"}>{r.direction_correct ? "✔ direction right" : "✖ direction wrong"}</span> ·{" "}
       {r.in_interval ? "inside range" : "outside range"}
     </span>
+  );
+}
+
+const share = (x: number) => pct(x, 0).replace("+", "");
+
+/** Short label for the band a row logged. v1 rows (null) and pre-cutover v2 rows logged the legacy band. */
+export function bandLabel(method: string | null | undefined): string {
+  if (!method || method === "legacy_band") return "legacy band";
+  if (method === "split_conformal") return "conformal";
+  if (method === "walk_forward_residuals") return "fallback: past errors";
+  if (method === "volatility_cone") return "fallback: volatility cone";
+  return method;
+}
+
+function PeriodRow({ p }: { p: ScorePeriod }) {
+  const when = p.first_base_date ? `${p.first_base_date} to ${p.last_base_date}` : "";
+  return (
+    <tr className="border-b border-slate-200 align-top dark:border-slate-800">
+      <th scope="row" className="py-1 pr-2 font-medium">{p.band === "legacy" ? "Legacy band" : "Conformal range"}<span className="block text-xs font-normal">{when}</span></th>
+      <td className="pr-2">{p.n_resolved} / {p.n_pending}{p.n_independent !== undefined ? ` (about ${p.n_independent} independent)` : ""}</td>
+      <td className="pr-2">
+        {p.interval_coverage !== undefined
+          ? <>{share(p.interval_coverage)}{p.interval_coverage_ci_90 ? ` (plausible ${share(p.interval_coverage_ci_90[0])} to ${share(p.interval_coverage_ci_90[1])})` : ""}</>
+          : "no results yet"}
+        {p.band === "conformal" && p.n_fallback ? <span className="block text-xs">{p.n_fallback} row{p.n_fallback === 1 ? "" : "s"} used a fallback range</span> : null}
+      </td>
+      <td>{p.interval_mean_width_pct !== undefined ? `${p.interval_mean_width_pct.toFixed(1)}%` : "–"}</td>
+    </tr>
   );
 }
 
@@ -80,11 +108,36 @@ export function TrackRecord() {
                     <tr><th scope="row" className="py-1 pr-2 font-medium">80% range contained the result</th><td>{pct(sc.interval_coverage ?? 0, 0).replace("+", "")} (target {pct(sc.interval_nominal ?? 0.8, 0).replace("+", "")}{sc.interval_coverage_ci_90 ? `; plausible range ${pct(sc.interval_coverage_ci_90[0], 0).replace("+", "")} to ${pct(sc.interval_coverage_ci_90[1], 0).replace("+", "")}` : ""})</td></tr>
                   </tbody>
                 </table>
-                <p className="text-xs">
-                  The logged 80% range is the band the log started with (the 10th to 90th percentile of past walk-forward errors around the forecast), not the
-                  conformal range the forecast page shows today. It is kept so the record measures one method from start to finish. Direction and range
-                  results count every ticker, but same-day tickers move together, so the plausible range uses independent periods, not rows.
-                </p>
+                {d.band_cutover ? (
+                  <section aria-labelledby="cutover" className="space-y-1 text-xs">
+                    <h3 id="cutover" className="text-sm font-semibold">Which 80% range is logged</h3>
+                    <p>
+                      Until {longDay(d.band_cutover.configured_from)} the log recorded the band it started with (the 10th to 90th percentile of past walk-forward errors
+                      around the forecast). From that trading day on, new rows record the same 80% range the forecast page shows (split conformal, or the fallback it
+                      names when its check fails).{" "}
+                      {d.band_cutover.first_conformal_base_date
+                        ? <>The first row with the new range is from {longDay(d.band_cutover.first_conformal_base_date)}.</>
+                        : <>No row has used the new range yet.</>}{" "}
+                      Earlier rows were not changed or re-scored: every row stores which range it used, each row is judged against the range it logged, and the two
+                      periods are reported separately below, so one coverage number never mixes two methods.
+                    </p>
+                    <p>Direction and range results count every ticker, but same-day tickers move together, so the plausible range uses independent periods, not rows.</p>
+                  </section>
+                ) : (
+                  <p className="text-xs">
+                    The logged 80% range is the band the log started with (the 10th to 90th percentile of past walk-forward errors around the forecast), not the
+                    conformal range the forecast page shows today. Direction and range results count every ticker, but same-day tickers move together, so the
+                    plausible range uses independent periods, not rows.
+                  </p>
+                )}
+                {d.band_cutover && (sc.periods?.length ?? 0) > 0 && (
+                  <table className="w-full text-left text-sm">
+                    <caption className="text-left text-xs font-semibold">80% range results by period (each against the range it logged)</caption>
+                    <thead><tr className="border-b border-slate-300 dark:border-slate-700">
+                      <th scope="col" className="py-1 pr-2">Period</th><th scope="col" className="pr-2">Resolved / waiting</th><th scope="col" className="pr-2">Contained the result (target 80%)</th><th scope="col">Average width</th></tr></thead>
+                    <tbody>{sc.periods!.map((p) => <PeriodRow key={p.band} p={p} />)}</tbody>
+                  </table>
+                )}
               </>
             )}
           </section>
@@ -124,7 +177,7 @@ export function TrackRecord() {
                         <td className="pr-2">{day(r.made_at)}<span className="block text-xs text-slate-700 dark:text-slate-300">data as of {r.base_date}</span></td>
                         <td className="pr-2 text-right">{money(r.base_close)}</td>
                         <td className="pr-2 text-right">{pct(Math.expm1(r.predicted_return))}</td>
-                        <td className="pr-2 text-right">{money(r.interval_low)} – {money(r.interval_high)}</td>
+                        <td className="pr-2 text-right">{money(r.interval_low)} – {money(r.interval_high)}{d.band_cutover && <span className="block text-xs text-slate-700 dark:text-slate-300">{bandLabel(r.band_method)}</span>}</td>
                         <td><Outcome r={r} /></td>
                       </tr>
                     ))}
