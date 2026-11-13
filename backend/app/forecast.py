@@ -170,6 +170,18 @@ def skill_ci(y_true: np.ndarray, y_pred: np.ndarray, block: int, level: float = 
     return float(lo), float(hi)
 
 
+def drift_baseline(y: pd.Series, folds: list[tuple[int, slice]], y_true: np.ndarray) -> dict:
+    """The "drift" baseline on the same test rows: each fold predicts the mean h-day return of its own training rows
+    (labels known before the embargo). Reported for context next to the naive baseline; it never changes the verdict.
+    Drift tends to look good in rising markets simply because it assumes the trend continues."""
+    pred = np.concatenate([np.full(len(y.iloc[test]), float(y.iloc[:train_end].mean())) for train_end, test in folds])
+    if len(pred) != len(y_true):  # cannot happen with walk_forward's own schedule; guard against silent misalignment
+        raise ValueError("drift baseline is not aligned with the walk-forward test rows")
+    m = _metrics(y_true, pred)
+    m["skill_vs_naive"] = float(1 - ratio(m["rmse"], float(np.sqrt(np.mean(y_true**2)))))
+    return m
+
+
 def build_path(last: float, bdays, horizon: int, centre: float, q_lo: float, q_hi: float) -> list[dict]:
     """Dated mid/low/high prices; the band widens like sqrt(time), an approximation of the cone."""
     out = []
@@ -246,6 +258,7 @@ def forecast(close: pd.Series, horizon: int, calib_close: pd.Series | None = Non
     up_rate = float(np.mean(wf.y_true > 0))
     base_m["directional_accuracy"] = up_rate  # hit-rate of "always predict up", for context
     ci_lo, ci_hi = skill_ci(wf.y_true, wf.y_pred, horizon)
+    drift_m = drift_baseline(y, folds, wf.y_true)
     n_test = int(len(wf.y_true))
     n_independent = max(n_test // horizon, 1)  # test windows overlap: roughly this many are independent
 
@@ -363,6 +376,10 @@ def forecast(close: pd.Series, horizon: int, calib_close: pd.Series | None = Non
             "skill_ci_90": [ci_lo, ci_hi],
             "model": model_m,
             "naive_baseline": base_m,
+            # Context only: a second simple baseline ("average past return"). The verdict stays vs. naive.
+            "drift_baseline": drift_m,
+            "skill_vs_drift": float(1 - ratio(model_m["rmse"], drift_m["rmse"])),
+            "n_folds": int(wf.n_folds),
             "skill_vs_baseline": float(skill),
             "beats_baseline": beats,
             "too_few_independent": bool(too_few),
