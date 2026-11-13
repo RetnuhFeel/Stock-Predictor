@@ -35,6 +35,37 @@ def tables(text: str) -> dict[str, str]:
     return {m.group(1): m.group(2).strip() for m in re.finditer(r"<!-- table: (\w+) -->\n(.*?)(?=\n\n<!-- table:|\Z)", text, re.S)}
 
 
+def robustness_values(r: Path) -> dict[str, str]:
+    """Numbers quoted in section 4.4, from run_robustness.py's saved results (2015-2021, all 20 tickers)."""
+    meta = json.loads((r / "robustness_summary.json").read_text())
+    p = pd.read_csv(r / "robustness_point.csv")
+    v = pd.read_csv(r / "robustness_vol.csv")
+    c = pd.read_csv(r / "robustness_conformal.csv")
+    assert len(meta["tickers"]) == 20, "section 4.4 says 'the same 20 tickers'; re-run run_robustness.py without --quick"
+    out = {"rob_bars": f"{int(pd.Series(meta['bars']).median()):,}"}
+    g = p[p.model == "gbm"]
+    for h in (5, 20, 60):
+        out[f"rob_gbm{h}"] = spc(g[g.horizon == h].skill.median())
+    g60 = g[g.horizon == 60]
+    out["rob_gbm_better"] = str(int((g60.verdict == "better").sum()))
+    out["rob_n60"] = str(int(g60.n_independent.median()))
+    out["rob_hit60"], out["rob_up60"] = pc(g60.hit_rate.median()), pc(g60.up_rate.median())
+    cand = p[p.model != "naive"]
+    better = cand[cand.verdict == "better"]
+    out["rob_better"], out["rob_n"] = str(len(better)), str(len(cand))
+    out["rob_better_drift"] = str(int((better.model == "drift").sum()))
+    out["rob_better_ridge"] = str(int((better.model == "ridge_ar").sum()))
+    gv = v[v.model == "garch"]
+    for h in (20, 60):
+        s = gv[gv.horizon == h]
+        out[f"rob_g{h}b"] = str(int((s.verdict_vs_ewma == "better").sum()))
+        out[f"rob_g{h}w"] = str(int((s.verdict_vs_ewma == "not_better").sum()))
+    for h in (5, 20):
+        s = c[c.horizon == h]
+        out[f"rob_cov{h}"], out[f"rob_ncov{h}"] = pc(s.conformal_cov.median()), pc(s.normal_cov.median())
+    return out
+
+
 def render() -> str:
     r = HERE / "results"
     meta = json.loads((r / "summary.json").read_text())
@@ -73,6 +104,8 @@ def render() -> str:
     vals["leak_leaky"], vals["leak_honest"] = spc(leak[lc[0]].median()), spc(leak[lc[2]].median())
     vals["leak_honest_n"] = str(int((leak[lc[2]] > 0).sum()))
     vals["commit"], vals["seconds"] = meta["git_commit"], str(meta["seconds"])
+    vals.update(robustness_values(r))
+    tabs.update(tables((r / "robustness_tables.md").read_text()))
 
     text = (HERE / "findings_template.md").read_text()
     text = re.sub(r"\{\{table:(\w+)\}\}", lambda m: tabs[m.group(1)], text)

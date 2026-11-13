@@ -213,3 +213,54 @@ def test_backtest_calibrates_on_data_up_to_the_true_origin_row(monkeypatch):
         assert s["n"] in cands, (s["n"], sorted(cands))
     # and the origin rows really are spread through the later folds, not the first few hundred rows
     assert row_of_j[0] > 150
+
+
+def test_band_quantiles_use_only_errors_known_at_the_origin():
+    """Regression: the standard band at an origin used every earlier-fold error, including the last horizon - 1 whose
+    h-day outcome lay after the origin (look-ahead). Only errors with row + horizon <= origin may be used."""
+    import numpy as np
+
+    from app.forecast import WalkForward
+    from app.spikes import band_quantiles, known_residuals
+
+    h = 5
+    test_rows = np.arange(100, 140)            # 40 consecutive test rows (two folds of 20)
+    y_true = np.zeros(40)
+    y_pred = np.zeros(40)
+    y_pred[15:20] = -1.0                       # huge errors on the last 5 rows of the first fold
+    wf = WalkForward(y_true, y_pred, 2)
+    origin = int(test_rows[20])                # first origin of the second fold (row 120)
+    r = known_residuals(wf, test_rows, 20, origin, h)
+    assert len(r) == 16                        # rows 100..115 are known at 120 (115 + 5 <= 120); 116..119 are not
+    assert np.count_nonzero(r) == 1            # only row 115's large error was already known
+    lo, hi = band_quantiles(wf, test_rows, 20, origin, h)
+    assert hi < 1.0                            # the unknown huge errors no longer widen the band
+    assert band_quantiles(wf, test_rows, 20, int(test_rows[0]), h) is None  # nothing known yet: no band
+
+
+def test_backtest_band_does_not_change_when_unknown_outcomes_change(monkeypatch):
+    """End to end: change the outcomes of the last horizon - 1 points of every fold before the next fold's first origin;
+    the band built at that first origin must not move (it only can if it peeked at them)."""
+    import numpy as np
+
+    from app import spikes
+
+    close = synthetic_prices(900, seed=5)["Close"]
+    h = 10
+    captured = []
+    real = spikes.band_quantiles
+
+    def spy(wf, test_rows, n_earlier, origin, horizon):
+        out = real(wf, test_rows, n_earlier, origin, horizon)
+        tampered = wf.y_true.copy()
+        late = np.arange(n_earlier)[test_rows[:n_earlier] + horizon > origin]
+        tampered[late] += 0.5
+        alt = real(type(wf)(tampered, wf.y_pred, wf.n_folds), test_rows, n_earlier, origin, horizon)
+        captured.append((out, alt, len(late)))
+        return out
+
+    monkeypatch.setattr(spikes, "band_quantiles", spy)
+    spikes.backtest(close, h)
+    assert captured and any(n > 0 for _, _, n in captured)
+    for out, alt, _ in captured:
+        assert out == alt
